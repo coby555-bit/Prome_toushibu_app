@@ -23,12 +23,12 @@ def get_spreadsheet():
     SPREADSHEET_ID = '1cDErL19Flvjk1EuES0RggRbzI5_wHK2VGhp7A-FQMtA'
     return gc.open_by_key(SPREADSHEET_ID)
 
-# 💡 最新株価の一括取得関数（10分キャッシュ）
+# 💡 最新株価 ＆ 前日終値の一括取得関数（10分キャッシュ）
 @st.cache_data(ttl=600)
-def fetch_latest_prices(symbols):
-    price_map = {}
+def fetch_stock_details(symbols):
+    detail_map = {}
     if not symbols:
-        return price_map
+        return detail_map
     
     yf_symbols = [f"{s}.T" if str(s).isdigit() and len(str(s)) == 4 else str(s) for s in symbols]
     
@@ -36,15 +36,21 @@ def fetch_latest_prices(symbols):
         tickers = yf.Tickers(" ".join(yf_symbols))
         for orig_symbol, yf_symbol in zip(symbols, yf_symbols):
             try:
-                hist = tickers.tickers[yf_symbol].history(period="1d")
-                if not hist.empty:
-                    price_map[str(orig_symbol)] = hist["Close"].iloc[-1]
+                # 直近2日分のデータから現在株価と前日終値を割り出し
+                hist = tickers.tickers[yf_symbol].history(period="5d")
+                if not hist.empty and len(hist) >= 1:
+                    current_price = hist["Close"].iloc[-1]
+                    prev_close = hist["Close"].iloc[-2] if len(hist) >= 2 else current_price
+                    detail_map[str(orig_symbol)] = {
+                        "current": current_price,
+                        "prev_close": prev_close
+                    }
             except Exception:
                 pass
     except Exception as e:
         st.warning(f"株価取得時に一部エラーが発生しました: {e}")
         
-    return price_map
+    return detail_map
 
 # 💡 数値クレンジング用の補助関数
 def clean_number(val):
@@ -56,21 +62,27 @@ def clean_number(val):
     except ValueError:
         return 0.0
 
-# 💡 安全な金額文字列フォーマット関数（＋/－付き）
-def fmt_currency_sign(val):
+# 💡 プラス（緑）/ マイナス（赤）装飾用のHTML補助関数
+def color_text_html(val, is_currency=True, is_percent=False):
     try:
-        return "¥" + "{:+,.0f}".format(float(val))
+        f_val = float(val)
+        if is_currency:
+            text = "¥" + "{:+,.0f}".format(f_val)
+        elif is_percent:
+            text = "{:+.2f}%".format(f_val)
+        else:
+            text = "{:+,.0f}".format(f_val)
+            
+        if f_val > 0:
+            return f'<span style="color: #28a745; font-weight: bold;">{text}</span>'
+        elif f_val < 0:
+            return f'<span style="color: #dc3545; font-weight: bold;">{text}</span>'
+        else:
+            return f'<span style="color: #6c757d;">{text}</span>'
     except (ValueError, TypeError):
-        return "¥0"
+        return str(val)
 
-# 💡 安全な金額文字列フォーマット関数（符号なし）
-def fmt_currency(val):
-    try:
-        return "¥" + "{:,.0f}".format(float(val))
-    except (ValueError, TypeError):
-        return "¥0"
-
-# 💡 システム用シート一覧（PredictionHistory等を除外）
+# システム用シート一覧
 SYSTEM_SHEETS = ['ダッシュボード', 'DailyLog', 'Temp', 'AppCache', 'PredictionCache', 'RuleData', 'PredictionHistory', 'ログ', '設定']
 
 try:
@@ -134,13 +146,15 @@ try:
                         ranking_display.append({
                             "順位": f"{int(row['順位'])}位",
                             "メンバー": row['メンバー'],
-                            "総資産": fmt_currency(row['総資産']),
-                            "総損益": fmt_currency_sign(pnl),
-                            "利益率": "{:+.2f}%".format(row['利益率']),
-                            "前日比": f"{fmt_currency_sign(diff)} ({diff_rate:+.2f}%)"
+                            "総資産": "¥{:,.0f}".format(row['総資産']),
+                            "総損益": color_text_html(pnl),
+                            "利益率": color_text_html(row['利益率'], is_currency=False, is_percent=True),
+                            "前日比": f"{color_text_html(diff)} ({color_text_html(diff_rate, is_currency=False, is_percent=True)})"
                         })
                     
-                    st.dataframe(pd.DataFrame(ranking_display), use_container_width=True)
+                    # HTMLタグ（赤字・緑字）を正しく表示するため to_html を利用
+                    df_rank_df = pd.DataFrame(ranking_display)
+                    st.write(df_rank_df.to_html(escape=False, index=False), unsafe_allow_html=True)
             else:
                 st.info("DailyLogにデータがありません。")
         except Exception as e:
@@ -152,7 +166,8 @@ try:
     with tab_personal:
         st.header("👤 個人別ポートフォリオ詳細")
         
-        selected_member = st.selectbox("メンバーを選択してください", members, key="personal_select")
+        # 💡 ドロップダウンから「ラジオボタン」に変更（水平並び）
+        selected_member = st.radio("メンバーを選択してください", members, horizontal=True, key="personal_radio")
         
         if selected_member:
             worksheet = sh.worksheet(selected_member)
@@ -169,11 +184,8 @@ try:
                 df_trade = df[df.iloc[:, 0] != ""].copy()
                 
                 if not df_trade.empty:
-                    # ----------------------------------------------------
-                    # 🔄 買付余力 ＆ 税引後実現損益 ＆ 保有計算ロジック
-                    # ----------------------------------------------------
-                    INITIAL_CAPITAL = 1000000 # 初期元本 100万円
-                    realized_pnl_pre_tax = 0.0 # 税引前実現損益
+                    INITIAL_CAPITAL = 1000000
+                    realized_pnl_pre_tax = 0.0
                     holdings = {}
                     
                     for _, row in df_trade.iterrows():
@@ -204,21 +216,15 @@ try:
                                 holdings[code]["shares"] = max(0, holdings[code]["shares"] - shares)
                                 holdings[code]["total_cost"] = max(0.0, holdings[code]["total_cost"] - (avg_cost * shares))
 
-                    # 💡 税金の計算 (利益が出ている場合のみ 20.315% を引く)
                     tax = int(realized_pnl_pre_tax * 0.20315) if realized_pnl_pre_tax > 0 else 0
                     realized_pnl_post_tax = realized_pnl_pre_tax - tax
                     
-                    # 現在保有中のポジションの取得総額
                     current_stock_cost = sum([data["total_cost"] for data in holdings.values() if data["shares"] > 0])
-                    
-                    # 💡 買付余力（現金残高）: 元本 + 税引後実現損益 - 現状の株買い付けコスト
                     cash_balance = INITIAL_CAPITAL + realized_pnl_post_tax - current_stock_cost
-                    
-                    # 現在保有中の銘柄コード
                     active_codes = [code for code, data in holdings.items() if data["shares"] > 0]
                     
-                    # 株価の取得と評価額計算
-                    price_map = fetch_latest_prices(active_codes) if active_codes else {}
+                    # 💡 株価詳細（前日終値含む）を一括取得
+                    detail_map = fetch_stock_details(active_codes) if active_codes else {}
                     
                     total_stock_eval = 0.0
                     total_unrealized_pnl = 0.0
@@ -228,7 +234,15 @@ try:
                         h = holdings[code]
                         shares = h["shares"]
                         avg_price = h["total_cost"] / shares if shares > 0 else 0.0
-                        current_price = price_map.get(str(code), avg_price)
+                        
+                        stock_info = detail_map.get(str(code), {"current": avg_price, "prev_close": avg_price})
+                        current_price = stock_info["current"]
+                        prev_close = stock_info["prev_close"]
+                        
+                        # 前日比（株単価ベースおよび保有株数ベース）
+                        day_diff_price = current_price - prev_close
+                        day_diff_rate = (day_diff_price / prev_close * 100) if prev_close > 0 else 0.0
+                        day_diff_total = day_diff_price * shares
                         
                         eval_val = current_price * shares
                         cost_val = h["total_cost"]
@@ -242,14 +256,14 @@ try:
                             "コード": code,
                             "銘柄名": h["name"],
                             "保有株数": "{:,} 株".format(shares),
-                            "取得単価": fmt_currency(avg_price),
-                            "現在株価": fmt_currency(current_price),
-                            "評価額": fmt_currency(eval_val),
-                            "含み損益": fmt_currency_sign(pnl_val),
-                            "損益率": "{:+.2f}%".format(pnl_rate)
+                            "取得単価": "¥{:,.0f}".format(avg_price),
+                            "現在株価": "¥{:,.0f}".format(current_price),
+                            "前日比": f"{color_text_html(day_diff_total)} ({color_text_html(day_diff_rate, is_currency=False, is_percent=True)})",
+                            "評価額": "¥{:,.0f}".format(eval_val),
+                            "含み損益": color_text_html(pnl_val),
+                            "損益率": color_text_html(pnl_rate, is_currency=False, is_percent=True)
                         })
                     
-                    # 💡 合計総資産 (買付余力 + 株式評価額)
                     total_assets = cash_balance + total_stock_eval
                     total_profit = total_assets - INITIAL_CAPITAL
                     total_profit_rate = (total_profit / INITIAL_CAPITAL) * 100
@@ -257,21 +271,24 @@ try:
                     # ----------------------------------------------------
                     # 📊 資産状況サマリー（4列カード表示）
                     # ----------------------------------------------------
+                    st.markdown("<br>", unsafe_allow_html=True)
                     st.subheader(f"📊 {selected_member} の資産状況サマリー")
                     col1, col2, col3, col4 = st.columns(4)
-                    col1.metric("合計総資産", fmt_currency(total_assets), delta=f"{fmt_currency_sign(total_profit)} ({total_profit_rate:+.2f}%)")
-                    col2.metric("買付余力 (現金)", fmt_currency(cash_balance))
-                    col3.metric("実現損益 (税引後)", fmt_currency_sign(realized_pnl_post_tax))
-                    col4.metric("含み損益 (評価益)", fmt_currency_sign(total_unrealized_pnl))
+                    col1.metric("合計総資産", "¥{:,.0f}".format(total_assets), delta="{:+,.0f}円 ({:+.2f}%)".format(total_profit, total_profit_rate))
+                    col2.metric("買付余力 (現金)", "¥{:,.0f}".format(cash_balance))
+                    col3.metric("実現損益 (税引後)", "¥{:,.0f}".format(realized_pnl_post_tax))
+                    col4.metric("含み損益 (評価益)", "¥{:,.0f}".format(total_unrealized_pnl))
                     
                     st.markdown("---")
                     st.subheader("📈 現在保有銘柄 一覧")
                     
                     if portfolio_data:
-                        st.dataframe(pd.DataFrame(portfolio_data), use_container_width=True)
+                        df_port = pd.DataFrame(portfolio_data)
+                        st.write(df_port.to_html(escape=False, index=False), unsafe_allow_html=True)
                     else:
                         st.info("現在保有中の銘柄はありません。")
                     
+                    st.markdown("<br>", unsafe_allow_html=True)
                     with st.expander("📜 全取引履歴を表示／非表示"):
                         st.dataframe(df_trade.iloc[:, :7], use_container_width=True)
                 else:
