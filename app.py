@@ -439,7 +439,7 @@ try:
             st.error(f"ランキング計算エラー: {e}")
 
     # =========================================================================
-    # TAB 2: 個人別詳細 (完全背景色包み込み対応)
+    # TAB 2: 個人別詳細 (保有銘柄一覧のみの背景色 ＆ 横スクロール対応)
     # =========================================================================
     with tab_personal:
         st.header("👤 個人別ポートフォリオ詳細")
@@ -458,21 +458,27 @@ try:
             mem_idx = members.index(selected_member) if selected_member in members else 0
             color_info = MEMBER_COLORS[mem_idx % len(MEMBER_COLORS)]
             
-            # 💡【重要】:has()擬似クラスを使い、内部のコンテナブロック全体を背景色で確実に包み込むCSS
+            # 💡【重要】保有銘柄一覧のみに適用するレスポンシブなCSS定義
             st.markdown(f"""
                 <style>
-                div[data-testid="stVerticalBlock"]:has(div.theme-marker-{mem_idx}) {{
-                    background-color: {color_info['bg_rgba']} !important;
-                    padding: 24px !important;
-                    border-radius: 16px !important;
-                    border-left: 8px solid {color_info['border']} !important;
-                    margin-top: 15px !important;
-                    margin-bottom: 25px !important;
+                .portfolio-theme-box-{mem_idx} {{
+                    background-color: {color_info['bg_rgba']};
+                    padding: 20px;
+                    border-radius: 12px;
+                    border-left: 6px solid {color_info['border']};
+                    margin-top: 15px;
+                    margin-bottom: 20px;
                 }}
-                div[data-testid="stVerticalBlock"]:has(div.theme-marker-{mem_idx}) [data-testid="stMetric"] {{
-                    background-color: rgba(255, 255, 255, 0.08) !important;
-                    padding: 12px !important;
-                    border-radius: 10px !important;
+                .table-scroll-container {{
+                    overflow-x: auto;
+                    -webkit-overflow-scrolling: touch;
+                    margin-top: 10px;
+                }}
+                .table-scroll-container table {{
+                    width: 100% !important;
+                    min-width: 650px;
+                    border-collapse: collapse;
+                    background-color: rgba(255, 255, 255, 0.05);
                 }}
                 </style>
             """, unsafe_allow_html=True)
@@ -534,27 +540,38 @@ try:
                 total_profit = total_assets - INITIAL_CAPITAL
                 total_profit_rate = (total_profit / INITIAL_CAPITAL) * 100
                 
-                # 💡【重要】st.container() 内にサマリーと一覧をまとめ、マーカー用要素を配置
-                with st.container():
-                    st.markdown(f'<div class="theme-marker-{mem_idx}" style="display:none;"></div>', unsafe_allow_html=True)
+                # 📊 資産状況サマリー（背景色なし・通常の標準表示）
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.subheader(f"📊 {selected_member} の資産状況サマリー")
+                col1, col2, col3, col4, col5 = st.columns(5)
+                col1.metric("合計総資産", "¥{:,.0f}".format(total_assets), delta="{:+,.0f}円 ({:+.2f}%)".format(total_profit, total_profit_rate))
+                col2.metric("買付余力 (現金)", "¥{:,.0f}".format(cash_balance))
+                col3.metric("実現損益 (税引後)", "¥{:,.0f}".format(realized_pnl_post_tax))
+                col4.metric("含み損益 (評価益)", "¥{:,.0f}".format(total_unrealized_pnl))
+                col5.metric("前日比 (合計)", "¥{:,.0f}".format(total_day_diff), delta="{:+,.0f}円".format(total_day_diff))
+                
+                st.markdown("---")
+                
+                # 📈 保有銘柄一覧のみにテーマ背景色と横スクロールコンテナを適用
+                if portfolio_data:
+                    df_port = pd.DataFrame(portfolio_data)
+                    table_html = df_port.to_html(escape=False, index=False)
                     
-                    # 📊 資産状況サマリー
-                    st.subheader(f"📊 {selected_member} の資産状況サマリー")
-                    col1, col2, col3, col4, col5 = st.columns(5)
-                    col1.metric("合計総資産", "¥{:,.0f}".format(total_assets), delta="{:+,.0f}円 ({:+.2f}%)".format(total_profit, total_profit_rate))
-                    col2.metric("買付余力 (現金)", "¥{:,.0f}".format(cash_balance))
-                    col3.metric("実現損益 (税引後)", "¥{:,.0f}".format(realized_pnl_post_tax))
-                    col4.metric("含み損益 (評価益)", "¥{:,.0f}".format(total_unrealized_pnl))
-                    col5.metric("前日比 (合計)", "¥{:,.0f}".format(total_day_diff), delta="{:+,.0f}円".format(total_day_diff))
-                    
-                    st.markdown("---")
-                    st.subheader("📈 現在保有銘柄 一覧")
-                    
-                    if portfolio_data:
-                        df_port = pd.DataFrame(portfolio_data)
-                        st.write(df_port.to_html(escape=False, index=False), unsafe_allow_html=True)
-                    else:
-                        st.info("現在保有中の銘柄はありません。")
+                    st.markdown(f"""
+                        <div class="portfolio-theme-box-{mem_idx}">
+                            <h3 style="margin-top:0; font-size:1.2rem; font-weight:bold; margin-bottom:10px;">📈 現在保有銘柄 一覧</h3>
+                            <div class="table-scroll-container">
+                                {table_html}
+                            </div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""
+                        <div class="portfolio-theme-box-{mem_idx}">
+                            <h3 style="margin-top:0; font-size:1.2rem; font-weight:bold; margin-bottom:10px;">📈 現在保有銘柄 一覧</h3>
+                            <p style="margin-bottom:0;">現在保有中の銘柄はありません。</p>
+                        </div>
+                    """, unsafe_allow_html=True)
                 
                 # ----------------------------------------------------
                 # ✏️ 取引履歴の直接編集機能 (スマホ最適化)
