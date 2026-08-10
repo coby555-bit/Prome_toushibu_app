@@ -22,9 +22,12 @@ MEMBER_COLORS = [
     {"main": "#6f42c1", "bg_hex": "#f8f0ff", "border": "#6f42c1"}  # メンバー6: パープル
 ]
 
-# 💡 Google認証のキャッシュ処理
-@st.cache_resource
-def get_spreadsheet():
+SPREADSHEET_ID = '1cDErL19Flvjk1EuES0RggRbzI5_wHK2VGhp7A-FQMtA'
+SYSTEM_SHEETS = ['ダッシュボード', 'DailyLog', 'Temp', 'AppCache', 'PredictionCache', 'RuleData', 'PredictionHistory', 'ログ', '設定']
+
+# 💡【重要】Google Sheets APIの制限回避用キャッシュ関数 (60秒間保持)
+@st.cache_data(ttl=60)
+def fetch_all_sheets_data(spreadsheet_id):
     credentials = Credentials.from_service_account_info(
         st.secrets["gcp_service_account"],
         scopes=[
@@ -33,7 +36,26 @@ def get_spreadsheet():
         ]
     )
     gc = gspread.authorize(credentials)
-    SPREADSHEET_ID = '1cDErL19Flvjk1EuES0RggRbzI5_wHK2VGhp7A-FQMtA'
+    sh = gc.open_by_key(spreadsheet_id)
+    
+    data_dict = {}
+    for ws in sh.worksheets():
+        try:
+            data_dict[ws.title] = ws.get_all_values()
+        except Exception:
+            data_dict[ws.title] = []
+    return data_dict
+
+# 💡 書き込み時（登録・更新）専用のスプレッドシート取得オブジェクト
+def get_spreadsheet_write():
+    credentials = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"],
+        scopes=[
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+    )
+    gc = gspread.authorize(credentials)
     return gc.open_by_key(SPREADSHEET_ID)
 
 # 💡 最新株価 ＆ 前日終値の一括取得関数（10分キャッシュ）
@@ -64,7 +86,7 @@ def fetch_stock_details(symbols):
         
     return detail_map
 
-# 💡 日本語の会社名を自動取得する関数（Yahoo! Finance JP スクレイピング）
+# 💡 日本語の会社名を自動取得する関数（24時間キャッシュ）
 @st.cache_data(ttl=86400)
 def fetch_company_name_jp(code):
     clean_code = re.sub(r'[^\d]', '', str(code))
@@ -113,12 +135,10 @@ def color_text_html(val, is_currency=True, is_percent=False):
     except (ValueError, TypeError):
         return str(val)
 
-# 💡 メンバー個人のリアルタイム計算を行う関数
-def calculate_member_state(sh, member_name):
+# 💡 メンバー個人のリアルタイム計算を行う関数 (APIアクセスなしで超高速処理)
+def calculate_member_state(all_values):
     INITIAL_CAPITAL = 1000000
     try:
-        worksheet = sh.worksheet(member_name)
-        all_values = worksheet.get_all_values()
         if len(all_values) <= 1:
             return None
             
@@ -185,7 +205,7 @@ def calculate_member_state(sh, member_name):
 
 # 💡 ルール更新用モーダルダイアログ
 @st.dialog("✏️ 投資部ルールの更新")
-def open_rule_edit_dialog(sh, current_text):
+def open_rule_edit_dialog(current_text):
     with st.form("rule_edit_form_dialog"):
         new_rule_text = st.text_area("新しいルール本文 (改行で箇条書きになります)", value=current_text, height=180)
         rule_note = st.text_input("更新メモ", value="ルール更新")
@@ -194,22 +214,23 @@ def open_rule_edit_dialog(sh, current_text):
         if submit_rule:
             if new_rule_text.strip():
                 now_str = datetime.now().strftime("%Y/%m/%d %H:%M")
+                sh = get_spreadsheet_write()
                 rule_sheet = sh.worksheet('RuleData')
                 rule_sheet.append_row([now_str, new_rule_text, rule_note])
+                st.cache_data.clear() # キャッシュクリアして即時反映
                 st.success("ルールを更新しました！")
                 st.rerun()
             else:
                 st.error("ルール本文を入力してください。")
 
-# 💡 取引入力用モーダルダイアログ (日本語会社名自動取得機能付き)
+# 💡 取引入力用モーダルダイアログ
 @st.dialog("📝 取引の新規入力")
-def open_trade_input_dialog(sh, default_member, members):
+def open_trade_input_dialog(default_member, members):
     input_member = st.selectbox("メンバー", members, index=members.index(default_member) if default_member in members else 0)
     input_type = st.selectbox("売買種別", ["買い", "売り"])
     
     input_code = st.text_input("銘柄コード (4桁)", placeholder="例: 7203", key="dlg_code")
     
-    # 💡 日本語会社名の自動取得
     auto_name = ""
     clean_code = re.sub(r'[^\d]', '', str(input_code))
     if len(clean_code) == 4:
@@ -230,6 +251,7 @@ def open_trade_input_dialog(sh, default_member, members):
             st.error("銘柄名を入力してください。")
         else:
             try:
+                sh = get_spreadsheet_write()
                 target_sheet = sh.worksheet(input_member)
                 formatted_date = input_date.strftime("%Y/%m/%d")
                 total_amount = input_shares * input_price
@@ -244,20 +266,18 @@ def open_trade_input_dialog(sh, default_member, members):
                     total_amount
                 ]
                 target_sheet.append_row(row_data)
+                st.cache_data.clear() # キャッシュクリアして即時反映
                 st.success(f"✅ {input_member} に {input_name} ({input_type}) を追加しました！")
                 st.rerun()
             except Exception as e:
                 st.error(f"登録エラー: {e}")
 
-# システム用シート一覧
-SYSTEM_SHEETS = ['ダッシュボード', 'DailyLog', 'Temp', 'AppCache', 'PredictionCache', 'RuleData', 'PredictionHistory', 'ログ', '設定']
-
 try:
-    sh = get_spreadsheet()
-    all_worksheets = [ws.title for ws in sh.worksheets()]
+    # 全シートデータを一括ロード (60秒キャッシュ適用)
+    all_sheets_data = fetch_all_sheets_data(SPREADSHEET_ID)
+    all_worksheets = list(all_sheets_data.keys())
     members = [name for name in all_worksheets if name not in SYSTEM_SHEETS and name.strip() != '']
 
-    # 💡 メンバーごとの固定カラーリスト
     main_color_list = [MEMBER_COLORS[i % len(MEMBER_COLORS)]["main"] for i in range(len(members))]
 
     # =========================================================================
@@ -265,19 +285,7 @@ try:
     # =========================================================================
     with st.expander("📋 投資部ルール ＆ 更新履歴を表示", expanded=False):
         try:
-            try:
-                rule_sheet = sh.worksheet('RuleData')
-            except Exception:
-                rule_sheet = sh.add_worksheet(title='RuleData', rows=100, cols=3)
-                rule_sheet.append_row(['日時', '本文', '更新メモ'])
-                rule_sheet.append_row([
-                    '2026/06/01 00:00',
-                    '利益の割合でご馳走の支払い率を決める\nお店は一位の人が決め、一万円以上のコースとする\n配当金と優待は入れない\n国内個別株のみ',
-                    '初期ルール制定'
-                ])
-
-            rule_values = rule_sheet.get_all_values()
-            
+            rule_values = all_sheets_data.get('RuleData', [])
             if len(rule_values) > 1:
                 raw_rule_rows = [r[:3] + [''] * (3 - len(r[:3])) for r in rule_values[1:]]
                 df_rules = pd.DataFrame(raw_rule_rows, columns=['日時', '本文', '更新メモ'])
@@ -298,7 +306,7 @@ try:
                     with col_r2:
                         st.markdown("<br>", unsafe_allow_html=True)
                         if st.button("✏️ ルールを更新する", type="secondary"):
-                            open_rule_edit_dialog(sh, latest_rule['本文'])
+                            open_rule_edit_dialog(latest_rule['本文'])
                             
                     st.markdown("---")
                     st.write("📜 **過去のルール更新日時一覧**")
@@ -323,8 +331,7 @@ try:
         st.header("📉 資産推移 ＆ 全体ランキング")
         
         try:
-            log_sheet = sh.worksheet('DailyLog')
-            log_values = log_sheet.get_all_values()
+            log_values = all_sheets_data.get('DailyLog', [])
             
             if len(log_values) > 1:
                 df_log = pd.DataFrame(log_values[1:], columns=log_values[0])
@@ -333,13 +340,12 @@ try:
                 df_log['利益率'] = pd.to_numeric(df_log['利益率'], errors='coerce')
                 df_log = df_log.dropna(subset=['日付', 'メンバー', '総資産'])
                 
-                # --- 1. 資産推移チャート（カラー統一対応） ---
+                # --- 1. 資産推移チャート ---
                 st.subheader("📈 全員の資産推移グラフ")
                 
                 df_log['総資産(フォーマット)'] = df_log['総資産'].apply(lambda x: f"¥{int(x):,}")
                 df_pivot_log = df_log.pivot(index='日付', columns='メンバー', values='総資産(フォーマット)').reset_index()
                 
-                # 💡 メンバーごとの固定カラーパレットをグラフにスケール適用
                 chart_base = alt.Chart(df_log).encode(
                     x=alt.X('日付:N', title='日付'),
                     y=alt.Y('総資産:Q', title='総資産 (円)', scale=alt.Scale(zero=False)),
@@ -374,7 +380,8 @@ try:
                 all_active_codes = set()
                 
                 for m in members:
-                    state = calculate_member_state(sh, m)
+                    m_vals = all_sheets_data.get(m, [])
+                    state = calculate_member_state(m_vals)
                     if state:
                         all_member_states[m] = state
                         all_active_codes.update(state["active_codes"])
@@ -430,7 +437,7 @@ try:
             st.error(f"ランキング計算エラー: {e}")
 
     # =========================================================================
-    # TAB 2: 個人別詳細 (背景色連動 ＆ 編集機能)
+    # TAB 2: 個人別詳細
     # =========================================================================
     with tab_personal:
         st.header("👤 個人別ポートフォリオ詳細")
@@ -443,14 +450,12 @@ try:
         with col_btn_add:
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("➕ 取引を入力する", type="primary"):
-                open_trade_input_dialog(sh, selected_member, members)
+                open_trade_input_dialog(selected_member, members)
         
         if selected_member:
-            # 💡 選択されたメンバーのカラー情報を特定
             mem_idx = members.index(selected_member) if selected_member in members else 0
             color_info = MEMBER_COLORS[mem_idx % len(MEMBER_COLORS)]
             
-            # 💡 メンバーカラーを背景色に適用するカスタムCSS
             st.markdown(f"""
                 <style>
                 .member-theme-box {{
@@ -464,7 +469,8 @@ try:
                 </style>
             """, unsafe_allow_html=True)
             
-            state = calculate_member_state(sh, selected_member)
+            m_vals = all_sheets_data.get(selected_member, [])
+            state = calculate_member_state(m_vals)
             
             if state:
                 df_trade = state["df_trade"]
@@ -520,10 +526,8 @@ try:
                 total_profit = total_assets - INITIAL_CAPITAL
                 total_profit_rate = (total_profit / INITIAL_CAPITAL) * 100
                 
-                # 💡 テーマカラー背景のコンテナ枠でサマリーと保有銘柄を包む
                 st.markdown(f'<div class="member-theme-box">', unsafe_allow_html=True)
                 
-                # 📊 資産状況サマリー
                 st.subheader(f"📊 {selected_member} の資産状況サマリー")
                 col1, col2, col3, col4, col5 = st.columns(5)
                 col1.metric("合計総資産", "¥{:,.0f}".format(total_assets), delta="{:+,.0f}円 ({:+.2f}%)".format(total_profit, total_profit_rate))
@@ -552,7 +556,6 @@ try:
                     
                     df_edit_src = df_trade.iloc[:, :7].copy()
                     
-                    # 取引履歴インタラクティブ編集コンポーネント
                     edited_df = st.data_editor(
                         df_edit_src,
                         num_rows="dynamic",
@@ -562,10 +565,10 @@ try:
                     
                     if st.button(f"💾 {selected_member} の取引履歴を保存する", type="primary"):
                         try:
+                            sh = get_spreadsheet_write()
                             target_sheet = sh.worksheet(selected_member)
                             all_vals = state["all_values"]
                             
-                            # A2:G範囲を更新
                             new_rows = edited_df.fillna("").values.tolist()
                             max_r = max(len(all_vals), len(new_rows) + 5)
                             
@@ -573,6 +576,7 @@ try:
                             if new_rows:
                                 target_sheet.update(f"A2:G{len(new_rows)+1}", new_rows)
                                 
+                            st.cache_data.clear() # キャッシュクリアして即時反映
                             st.success("✅ 取引履歴の変更を反映しました！")
                             st.rerun()
                         except Exception as ex:
