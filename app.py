@@ -12,7 +12,7 @@ from google.oauth2.service_account import Credentials
 st.set_page_config(page_title="投資部 100万円投資レース", layout="wide")
 st.title("📊 投資部 100万円投資レース")
 
-# 💡 メンバーカラーのパレット定義 (メイン色 / 透過背景色 / ボーダー色)
+# 💡 メンバーカラーのパレット定義
 MEMBER_COLORS = [
     {"main": "#0d6efd", "bg_rgba": "rgba(13, 110, 253, 0.12)", "border": "#0d6efd"},  # メンバー1: ブルー
     {"main": "#dc3545", "bg_rgba": "rgba(220, 53, 69, 0.12)", "border": "#dc3545"},  # メンバー2: レッド
@@ -25,7 +25,7 @@ MEMBER_COLORS = [
 SPREADSHEET_ID = '1cDErL19Flvjk1EuES0RggRbzI5_wHK2VGhp7A-FQMtA'
 SYSTEM_SHEETS = ['ダッシュボード', 'DailyLog', 'Temp', 'AppCache', 'PredictionCache', 'RuleData', 'PredictionHistory', 'ログ', '設定']
 
-# 💡 Google Sheets APIの制限回避用キャッシュ関数 (60秒間保持)
+# 💡 Google Sheets API制限回避用キャッシュ関数 (60秒保持)
 @st.cache_data(ttl=60)
 def fetch_all_sheets_data(spreadsheet_id):
     credentials = Credentials.from_service_account_info(
@@ -46,7 +46,7 @@ def fetch_all_sheets_data(spreadsheet_id):
             data_dict[ws.title] = []
     return data_dict
 
-# 💡 書き込み時（登録・更新）専用のスプレッドシート取得オブジェクト
+# 💡 書き込み時専用スプレッドシート取得関数
 def get_spreadsheet_write():
     credentials = Credentials.from_service_account_info(
         st.secrets["gcp_service_account"],
@@ -58,7 +58,7 @@ def get_spreadsheet_write():
     gc = gspread.authorize(credentials)
     return gc.open_by_key(SPREADSHEET_ID)
 
-# 💡 最新株価 ＆ 前日終値の一括取得関数（10分キャッシュ）
+# 💡 最新株価 ＆ 前日終値取得関数 (10分キャッシュ)
 @st.cache_data(ttl=600)
 def fetch_stock_details(symbols):
     detail_map = {}
@@ -82,11 +82,11 @@ def fetch_stock_details(symbols):
             except Exception:
                 pass
     except Exception as e:
-        st.warning(f"株価取得時に一部エラーが発生しました: {e}")
+        st.warning(f"株価取得エラー: {e}")
         
     return detail_map
 
-# 💡 日本語の会社名を自動取得する関数（24時間キャッシュ）
+# 💡 日本語社名自動取得関数 (24時間キャッシュ)
 @st.cache_data(ttl=86400)
 def fetch_company_name_jp(code):
     clean_code = re.sub(r'[^\d]', '', str(code))
@@ -97,13 +97,11 @@ def fetch_company_name_jp(code):
             html = urllib.request.urlopen(req, timeout=3).read().decode('utf-8')
             m = re.search(r'<title>(.*?)【', html)
             if m:
-                name = m.group(1).replace('(株)', '').replace('（株）', '').strip()
-                return name
+                return m.group(1).replace('(株)', '').replace('（株）', '').strip()
         except Exception:
             pass
     return ""
 
-# 💡 数値クレンジング用の補助関数
 def clean_number(val):
     if val is None:
         return 0.0
@@ -113,7 +111,6 @@ def clean_number(val):
     except ValueError:
         return 0.0
 
-# 💡 プラス（緑）/ マイナス（赤）/ ±0（灰色）の装飾用HTML関数
 def color_text_html(val, is_currency=True, is_percent=False):
     try:
         f_val = float(val)
@@ -135,7 +132,6 @@ def color_text_html(val, is_currency=True, is_percent=False):
     except (ValueError, TypeError):
         return str(val)
 
-# 💡 メンバー個人のリアルタイム計算を行う関数
 def calculate_member_state(all_values):
     INITIAL_CAPITAL = 1000000
     try:
@@ -188,7 +184,6 @@ def calculate_member_state(all_values):
         
         current_stock_cost = sum([data["total_cost"] for data in holdings.values() if data["shares"] > 0])
         cash_balance = INITIAL_CAPITAL + realized_pnl_post_tax - current_stock_cost
-        
         active_codes = [code for code, data in holdings.items() if data["shares"] > 0]
         
         return {
@@ -203,7 +198,6 @@ def calculate_member_state(all_values):
     except Exception:
         return None
 
-# 💡 ルール更新用モーダルダイアログ
 @st.dialog("✏️ 投資部ルールの更新")
 def open_rule_edit_dialog(current_text):
     with st.form("rule_edit_form_dialog"):
@@ -223,16 +217,13 @@ def open_rule_edit_dialog(current_text):
             else:
                 st.error("ルール本文を入力してください。")
 
-# 💡 取引入力用モーダルダイアログ
 @st.dialog("📝 取引の新規入力")
 def open_trade_input_dialog(default_member, members):
     input_member = st.selectbox("メンバー", members, index=members.index(default_member) if default_member in members else 0)
     input_type = st.selectbox("売買種別", ["買い", "売り"])
-    
     input_code = st.text_input("銘柄コード (4桁)", placeholder="例: 7203", key="dlg_code_input")
     
     clean_code = re.sub(r'[^\d]', '', str(input_code))
-    
     if "last_searched_code" not in st.session_state:
         st.session_state["last_searched_code"] = ""
         
@@ -259,15 +250,7 @@ def open_trade_input_dialog(default_member, members):
                 formatted_date = input_date.strftime("%Y/%m/%d")
                 total_amount = input_shares * input_price
                 
-                row_data = [
-                    formatted_date,
-                    input_type,
-                    input_name.strip(),
-                    clean_code,
-                    input_shares,
-                    input_price,
-                    total_amount
-                ]
+                row_data = [formatted_date, input_type, input_name.strip(), clean_code, input_shares, input_price, total_amount]
                 target_sheet.append_row(row_data)
                 st.cache_data.clear()
                 st.success(f"✅ {input_member} に {input_name} ({input_type}) を追加しました！")
@@ -295,25 +278,19 @@ try:
                 
                 if not df_rules.empty:
                     latest_rule = df_rules.iloc[-1]
-                    
                     col_r1, col_r2 = st.columns([3, 1])
                     with col_r1:
                         st.subheader("📜 最新の投資部ルール")
                         st.caption(f"最終更新: {latest_rule['日時']}")
-                        
                         lines = [line.strip() for line in latest_rule['本文'].split('\n') if line.strip()]
-                        bullet_list = "\n".join([f"* {line}" for line in lines])
-                        st.markdown(bullet_list)
-                        
+                        st.markdown("\n".join([f"* {line}" for line in lines]))
                     with col_r2:
                         st.markdown("<br>", unsafe_allow_html=True)
                         if st.button("✏️ ルールを更新する", type="secondary"):
                             open_rule_edit_dialog(latest_rule['本文'])
-                            
                     st.markdown("---")
                     st.write("📜 **過去のルール更新日時一覧**")
-                    df_history_dates = df_rules[['日時']].iloc[::-1].reset_index(drop=True)
-                    st.dataframe(df_history_dates, use_container_width=True)
+                    st.dataframe(df_rules[['日時']].iloc[::-1].reset_index(drop=True), use_container_width=True)
                 else:
                     st.info("RuleDataに有効なルール履歴がありません。")
             else:
@@ -321,9 +298,7 @@ try:
         except Exception as e:
             st.error(f"ルールデータ読み込みエラー: {e}")
 
-    # =========================================================================
     # メインタブの作成
-    # =========================================================================
     tab_race, tab_personal = st.tabs(["🏆 実績 ＆ 全体ランキング", "👤 個人別詳細"])
 
     # =========================================================================
@@ -342,39 +317,130 @@ try:
                 df_log['利益率'] = pd.to_numeric(df_log['利益率'], errors='coerce')
                 df_log = df_log.dropna(subset=['日付', 'メンバー', '総資産'])
                 
-                # --- 1. 資産推移チャート ---
+                # --- 1. 資産推移チャート設定 ---
                 st.subheader("📈 全員の資産推移グラフ")
                 
-                df_log['総資産(フォーマット)'] = df_log['総資産'].apply(lambda x: f"¥{int(x):,}")
-                df_pivot_log = df_log.pivot(index='日付', columns='メンバー', values='総資産(フォーマット)').reset_index()
+                # 💡 操作UI: 期間ラジオボタン ＆ リセット ＆ メンバー線ON/OFF選択
+                col_chart_ctrl1, col_chart_ctrl2, col_chart_ctrl3 = st.columns([2, 1.5, 3])
                 
-                chart_base = alt.Chart(df_log).encode(
-                    x=alt.X('日付:N', title='日付'),
-                    y=alt.Y('総資産:Q', title='総資産 (円)', scale=alt.Scale(zero=False)),
-                    color=alt.Color('メンバー:N', title='メンバー', scale=alt.Scale(domain=members, range=main_color_list))
-                )
+                with col_chart_ctrl1:
+                    # 💡 表示期間切り替え（key設定によりSessionStateで選択を保持）
+                    period_range = st.radio(
+                        "表示期間",
+                        ["全期間", "1ヶ月", "1週間"],
+                        horizontal=True,
+                        key="chart_period_range_select"
+                    )
+                    
+                with col_chart_ctrl2:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    # 💡 拡大縮小リセットボタン
+                    if st.button("🔄 拡大・縮小をリセット"):
+                        st.rerun()
+                        
+                with col_chart_ctrl3:
+                    # 💡 線のON/OFF用マルチセレクト
+                    selected_chart_members = st.multiselect(
+                        "表示するメンバーの選択 (線のON/OFF)",
+                        options=members,
+                        default=members,
+                        key="chart_members_multiselect"
+                    )
+
+                # 日付クレンジング＆期間フィルタリング
+                df_log['日付_dt'] = pd.to_datetime(df_log['日付'], errors='coerce')
+                df_chart_src = df_log.dropna(subset=['日付_dt']).sort_values('日付_dt').copy()
                 
-                lines = chart_base.mark_line(strokeWidth=3)
-                nearest = alt.selection_point(nearest=True, on='pointerover', fields=['日付'], empty=False)
-                tooltip_cols = [alt.Tooltip('日付:N')] + [alt.Tooltip(f'{m}:N', title=m) for m in members if m in df_pivot_log.columns]
-                
-                selectors = alt.Chart(df_pivot_log).mark_rect().encode(
-                    x='日付:N',
-                    opacity=alt.value(0),
-                    tooltip=tooltip_cols
-                ).add_params(nearest)
-                
-                points = chart_base.mark_point(size=50).encode(
-                    opacity=alt.condition(nearest, alt.value(1), alt.value(0))
-                )
-                
-                rules = alt.Chart(df_pivot_log).mark_rule(color='gray', strokeDash=[2, 2]).encode(
-                    x='日付:N'
-                ).transform_filter(nearest)
-                
-                final_chart = alt.layer(lines, selectors, points, rules).properties(height=400).interactive()
-                st.altair_chart(final_chart, use_container_width=True)
-                
+                if period_range == "1週間":
+                    max_d = df_chart_src['日付_dt'].max()
+                    df_chart_src = df_chart_src[df_chart_src['日付_dt'] >= max_d - pd.Timedelta(days=7)]
+                elif period_range == "1ヶ月":
+                    max_d = df_chart_src['日付_dt'].max()
+                    df_chart_src = df_chart_src[df_chart_src['日付_dt'] >= max_d - pd.Timedelta(days=30)]
+
+                # メンバーのON/OFFフィルター適用
+                if selected_chart_members:
+                    df_chart_src = df_chart_src[df_chart_src['メンバー'].isin(selected_chart_members)]
+
+                if not df_chart_src.empty:
+                    # 💡 月ごとの縞模様背景用データの算出
+                    unique_dates = df_chart_src[['日付', '日付_dt']].drop_duplicates().sort_values('日付_dt')
+                    unique_dates['年月'] = unique_dates['日付_dt'].dt.to_period('M')
+                    month_groups = unique_dates.groupby('年月').agg(
+                        start_date=('日付', 'first'),
+                        end_date=('日付', 'last')
+                    ).reset_index()
+                    month_groups['stripe'] = month_groups.index % 2 == 1
+                    stripes_df = month_groups[month_groups['stripe']].copy()
+
+                    # 💡 週の区切り（縦破線）用データの算出
+                    unique_dates['週番号'] = unique_dates['日付_dt'].dt.isocalendar().week
+                    unique_dates['前週番号'] = unique_dates['週番号'].shift(1)
+                    week_starts = unique_dates[unique_dates['週番号'] != unique_dates['前週番号']]['日付'].tolist()
+                    if len(week_starts) > 0 and week_starts[0] == unique_dates['日付'].iloc[0]:
+                        week_starts = week_starts[1:]
+                    df_week_rules = pd.DataFrame({'日付': week_starts})
+
+                    # チャートのベース構築
+                    df_chart_src['総資産(フォーマット)'] = df_chart_src['総資産'].apply(lambda x: f"¥{int(x):,}")
+                    df_pivot_log = df_chart_src.pivot(index='日付', columns='メンバー', values='総資産(フォーマット)').reset_index()
+
+                    # インタラクティブ凡例選択（線のON/OFF強調）
+                    legend_selection = alt.selection_point(fields=['メンバー'], bind='legend')
+
+                    # 1. 月ごとの縞模様（背景レイヤー）
+                    stripe_bg = alt.Chart(stripes_df).mark_rect(
+                        opacity=0.12,
+                        color='gray'
+                    ).encode(
+                        x='start_date:N',
+                        x2='end_date:N'
+                    )
+
+                    # 2. 週の区切り破線（垂直線レイヤー）
+                    week_rules = alt.Chart(df_week_rules).mark_rule(
+                        strokeDash=[4, 4],
+                        color='#888888',
+                        opacity=0.6,
+                        strokeWidth=1.2
+                    ).encode(
+                        x='日付:N'
+                    )
+
+                    # 3. メインの折れ線レイヤー
+                    chart_base = alt.Chart(df_chart_src).encode(
+                        x=alt.X('日付:N', title='日付'),
+                        y=alt.Y('総資産:Q', title='総資産 (円)', scale=alt.Scale(zero=False)),
+                        color=alt.Color('メンバー:N', title='メンバー', scale=alt.Scale(domain=members, range=main_color_list)),
+                        opacity=alt.condition(legend_selection, alt.value(1.0), alt.value(0.15))
+                    ).add_params(legend_selection)
+
+                    lines = chart_base.mark_line(strokeWidth=3)
+
+                    # 4. マウスホバーポップアップ（ツールチップ）
+                    nearest = alt.selection_point(nearest=True, on='pointerover', fields=['日付'], empty=False)
+                    tooltip_cols = [alt.Tooltip('日付:N')] + [alt.Tooltip(f'{m}:N', title=m) for m in members if m in df_pivot_log.columns]
+
+                    selectors = alt.Chart(df_pivot_log).mark_rect().encode(
+                        x='日付:N',
+                        opacity=alt.value(0),
+                        tooltip=tooltip_cols
+                    ).add_params(nearest)
+
+                    points = chart_base.mark_point(size=50).encode(
+                        opacity=alt.condition(nearest, alt.value(1), alt.value(0))
+                    )
+
+                    hover_rules = alt.Chart(df_pivot_log).mark_rule(color='gray', strokeDash=[2, 2]).encode(
+                        x='日付:N'
+                    ).transform_filter(nearest)
+
+                    # 全レイヤーの重ね合わせ描画
+                    final_chart = alt.layer(stripe_bg, week_rules, lines, selectors, points, hover_rules).properties(height=420).interactive()
+                    st.altair_chart(final_chart, use_container_width=True)
+                else:
+                    st.info("選択された条件に該当するデータがありません。")
+
                 # --- 2. 最新資産ランキング ---
                 st.subheader("🏆 最新資産ランキング")
                 
@@ -439,7 +505,7 @@ try:
             st.error(f"ランキング計算エラー: {e}")
 
     # =========================================================================
-    # TAB 2: 個人別詳細 (保有銘柄一覧のみの背景色 ＆ 横スクロール対応)
+    # TAB 2: 個人別詳細
     # =========================================================================
     with tab_personal:
         st.header("👤 個人別ポートフォリオ詳細")
@@ -458,7 +524,6 @@ try:
             mem_idx = members.index(selected_member) if selected_member in members else 0
             color_info = MEMBER_COLORS[mem_idx % len(MEMBER_COLORS)]
             
-            # 💡【重要】保有銘柄一覧のみに適用するレスポンシブなCSS定義
             st.markdown(f"""
                 <style>
                 .portfolio-theme-box-{mem_idx} {{
@@ -540,7 +605,6 @@ try:
                 total_profit = total_assets - INITIAL_CAPITAL
                 total_profit_rate = (total_profit / INITIAL_CAPITAL) * 100
                 
-                # 📊 資産状況サマリー（背景色なし・通常の標準表示）
                 st.markdown("<br>", unsafe_allow_html=True)
                 st.subheader(f"📊 {selected_member} の資産状況サマリー")
                 col1, col2, col3, col4, col5 = st.columns(5)
@@ -552,7 +616,6 @@ try:
                 
                 st.markdown("---")
                 
-                # 📈 保有銘柄一覧のみにテーマ背景色と横スクロールコンテナを適用
                 if portfolio_data:
                     df_port = pd.DataFrame(portfolio_data)
                     table_html = df_port.to_html(escape=False, index=False)
@@ -573,9 +636,6 @@ try:
                         </div>
                     """, unsafe_allow_html=True)
                 
-                # ----------------------------------------------------
-                # ✏️ 取引履歴の直接編集機能 (スマホ最適化)
-                # ----------------------------------------------------
                 st.markdown("<br>", unsafe_allow_html=True)
                 with st.expander("📜 全取引履歴の編集／閲覧", expanded=False):
                     st.caption("💡 スマホでも操作可能：日付をタップでカレンダー、種別をタップでドロップダウン選択できます。編集後は「💾 変更を保存する」を押してください。")
