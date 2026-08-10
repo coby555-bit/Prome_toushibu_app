@@ -2,6 +2,7 @@ import streamlit as st
 import gspread
 import pandas as pd
 import yfinance as yf
+import re
 from google.oauth2.service_account import Credentials
 
 # ページの基本設定
@@ -29,7 +30,7 @@ def fetch_latest_prices(symbols):
     if not symbols:
         return price_map
     
-    yf_symbols = [f"{s}.T" if s.isdigit() and len(s) == 4 else s for s in symbols]
+    yf_symbols = [f"{s}.T" if str(s).isdigit() and len(str(s)) == 4 else str(s) for s in symbols]
     
     try:
         tickers = yf.Tickers(" ".join(yf_symbols))
@@ -37,13 +38,24 @@ def fetch_latest_prices(symbols):
             try:
                 hist = tickers.tickers[yf_symbol].history(period="1d")
                 if not hist.empty:
-                    price_map[orig_symbol] = hist["Close"].iloc[-1]
+                    price_map[str(orig_symbol)] = hist["Close"].iloc[-1]
             except Exception:
                 pass
     except Exception as e:
         st.warning(f"株価取得時に一部エラーが発生しました: {e}")
         
     return price_map
+
+# 💡 数値クレンジング用の補助関数
+def clean_number(val):
+    if val is None:
+        return 0.0
+    # カンマや全角、円マーク等を除去して数値化
+    s = re.sub(r'[^\d.-]', '', str(val))
+    try:
+        return float(s) if s else 0.0
+    except ValueError:
+        return 0.0
 
 # システム用シート一覧
 SYSTEM_SHEETS = ['ダッシュボード', 'DailyLog', 'Temp', 'AppCache', 'PredictionCache', 'RuleData']
@@ -62,39 +74,29 @@ try:
     with tab_race:
         st.header("📉 資産推移 ＆ 全体ランキング")
         
-        # DailyLogシートの取得
         try:
             log_sheet = sh.worksheet('DailyLog')
             log_values = log_sheet.get_all_values()
             
             if len(log_values) > 1:
                 df_log = pd.DataFrame(log_values[1:], columns=log_values[0])
-                # 数値型の変換とデータのクレンジング
                 df_log['総資産'] = pd.to_numeric(df_log['総資産'], errors='coerce')
                 df_log['利益率'] = pd.to_numeric(df_log['利益率'], errors='coerce')
                 df_log = df_log.dropna(subset=['日付', 'メンバー', '総資産'])
                 
-                # --- 1. 資産推移チャート ---
                 st.subheader("📈 全員の資産推移グラフ")
-                # ピボットテーブルを作成（行: 日付, 列: メンバー, 値: 総資産）
                 df_pivot = df_log.pivot(index='日付', columns='メンバー', values='総資産')
                 st.line_chart(df_pivot)
                 
-                # --- 2. 最新ランキング表 ---
                 st.subheader("🏆 最新資産ランキング")
-                
-                # 最新日付と1日前の日付を取得
                 dates = sorted(df_log['日付'].unique())
                 latest_date = dates[-1] if dates else None
                 prev_date = dates[-2] if len(dates) >= 2 else None
                 
                 if latest_date:
                     st.caption(f"表示基準日: {latest_date}")
-                    
-                    # 最新日のデータ
                     df_latest = df_log[df_log['日付'] == latest_date].copy()
                     
-                    # 前日比の計算
                     if prev_date:
                         df_prev = df_log[df_log['日付'] == prev_date][['メンバー', '総資産']].rename(columns={'総資産': '前日総資産'})
                         df_latest = pd.merge(df_latest, df_prev, on='メンバー', how='left')
@@ -105,12 +107,10 @@ try:
                         df_latest['前日比(円)'] = 0
                         df_latest['前日比(%)'] = 0.0
                     
-                    # 資産順にソートして順位を付与
                     df_latest = df_latest.sort_values(by='総資産', ascending=False).reset_index(drop=True)
                     df_latest['順位'] = df_latest.index + 1
                     df_latest['総損益'] = df_latest['総資産'] - 1000000
                     
-                    # 💡 表示用にフォーマット (修正箇所: + を前に記述)
                     ranking_display = []
                     for _, row in df_latest.iterrows():
                         pnl = row['総損益']
@@ -133,7 +133,7 @@ try:
             st.error(f"DailyLogの読み込みエラー: {e}")
 
     # =========================================================================
-    # TAB 2: 個人別詳細
+    # TAB 2: 個人別詳細（強化版保有ロジック）
     # =========================================================================
     with tab_personal:
         st.header("👤 個人別ポートフォリオ詳細")
@@ -152,37 +152,42 @@ try:
                 columns = [h if h.strip() != "" else f"列_{i+1}" for i, h in enumerate(header)]
                 df.columns = columns
                 
+                # 1列目（日付）が空でない行のみ抽出
                 df_trade = df[df.iloc[:, 0] != ""].copy()
                 
                 if not df_trade.empty:
-                    # 保有計算
+                    # ----------------------------------------------------
+                    # 🔄 強化版：保有状況の計算ロジック
+                    # ----------------------------------------------------
                     holdings = {}
+                    
                     for _, row in df_trade.iterrows():
-                        try:
-                            trade_type = str(row.iloc[1]).strip()
-                            name = str(row.iloc[2]).strip()
-                            code = str(row.iloc[3]).strip()
-                            shares = int(float(row.iloc[4])) if row.iloc[4] else 0
-                            price = float(row.iloc[5]) if row.iloc[5] else 0.0
-                            
-                            if not code or shares <= 0 or price <= 0:
-                                continue
-                                
-                            if code not in holdings:
-                                holdings[code] = {"name": name, "shares": 0, "total_cost": 0.0}
-                                
-                            if trade_type == "買い":
-                                holdings[code]["shares"] += shares
-                                holdings[code]["total_cost"] += shares * price
-                                holdings[code]["name"] = name
-                            elif trade_type == "売り":
-                                if holdings[code]["shares"] > 0:
-                                    avg_cost = holdings[code]["total_cost"] / holdings[code]["shares"]
-                                    holdings[code]["shares"] = max(0, holdings[code]["shares"] - shares)
-                                    holdings[code]["total_cost"] = max(0.0, holdings[code]["total_cost"] - (avg_cost * shares))
-                        except Exception:
+                        trade_type = str(row.iloc[1]).strip() # '買い' or '売り'
+                        name = str(row.iloc[2]).strip()
+                        # 銘柄コードを厳格に文字列化＆4桁に整頓
+                        raw_code = str(row.iloc[3]).strip().replace('.0', '')
+                        code = re.sub(r'^\d{4}$', lambda m: m.group(0), raw_code)
+                        
+                        shares = int(clean_number(row.iloc[4]))
+                        price = clean_number(row.iloc[5])
+                        
+                        if not code or shares <= 0 or price <= 0:
                             continue
+                            
+                        if code not in holdings:
+                            holdings[code] = {"name": name, "shares": 0, "total_cost": 0.0}
+                            
+                        if trade_type == "買い":
+                            holdings[code]["shares"] += shares
+                            holdings[code]["total_cost"] += shares * price
+                            holdings[code]["name"] = name
+                        elif trade_type == "売り":
+                            if holdings[code]["shares"] > 0:
+                                avg_cost = holdings[code]["total_cost"] / holdings[code]["shares"]
+                                holdings[code]["shares"] = max(0, holdings[code]["shares"] - shares)
+                                holdings[code]["total_cost"] = max(0.0, holdings[code]["total_cost"] - (avg_cost * shares))
 
+                    # 1株以上保有している銘柄に絞り込み
                     active_codes = [code for code, data in holdings.items() if data["shares"] > 0]
                     
                     st.subheader(f"📈 {selected_member} の現在保有銘柄")
@@ -199,7 +204,7 @@ try:
                             h = holdings[code]
                             shares = h["shares"]
                             avg_price = h["total_cost"] / shares if shares > 0 else 0.0
-                            current_price = price_map.get(code, avg_price)
+                            current_price = price_map.get(str(code), avg_price)
                             
                             eval_val = current_price * shares
                             cost_val = h["total_cost"]
