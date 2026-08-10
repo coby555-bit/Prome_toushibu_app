@@ -25,7 +25,7 @@ MEMBER_COLORS = [
 SPREADSHEET_ID = '1cDErL19Flvjk1EuES0RggRbzI5_wHK2VGhp7A-FQMtA'
 SYSTEM_SHEETS = ['ダッシュボード', 'DailyLog', 'Temp', 'AppCache', 'PredictionCache', 'RuleData', 'PredictionHistory', 'ログ', '設定']
 
-# 💡【重要】Google Sheets APIの制限回避用キャッシュ関数 (60秒間保持)
+# 💡 Google Sheets APIの制限回避用キャッシュ関数 (60秒間保持)
 @st.cache_data(ttl=60)
 def fetch_all_sheets_data(spreadsheet_id):
     credentials = Credentials.from_service_account_info(
@@ -135,7 +135,7 @@ def color_text_html(val, is_currency=True, is_percent=False):
     except (ValueError, TypeError):
         return str(val)
 
-# 💡 メンバー個人のリアルタイム計算を行う関数 (APIアクセスなしで超高速処理)
+# 💡 メンバー個人のリアルタイム計算を行う関数
 def calculate_member_state(all_values):
     INITIAL_CAPITAL = 1000000
     try:
@@ -217,29 +217,33 @@ def open_rule_edit_dialog(current_text):
                 sh = get_spreadsheet_write()
                 rule_sheet = sh.worksheet('RuleData')
                 rule_sheet.append_row([now_str, new_rule_text, rule_note])
-                st.cache_data.clear() # キャッシュクリアして即時反映
+                st.cache_data.clear()
                 st.success("ルールを更新しました！")
                 st.rerun()
             else:
                 st.error("ルール本文を入力してください。")
 
-# 💡 取引入力用モーダルダイアログ
+# 💡 取引入力用モーダルダイアログ (銘柄コード入力で社名自動入力)
 @st.dialog("📝 取引の新規入力")
 def open_trade_input_dialog(default_member, members):
     input_member = st.selectbox("メンバー", members, index=members.index(default_member) if default_member in members else 0)
     input_type = st.selectbox("売買種別", ["買い", "売り"])
     
-    input_code = st.text_input("銘柄コード (4桁)", placeholder="例: 7203", key="dlg_code")
+    input_code = st.text_input("銘柄コード (4桁)", placeholder="例: 7203", key="dlg_code_input")
     
-    auto_name = ""
+    # 💡 銘柄コード変更時に即時で日本語社名をセッションステートにセット
     clean_code = re.sub(r'[^\d]', '', str(input_code))
-    if len(clean_code) == 4:
-        fetched = fetch_company_name_jp(clean_code)
-        if fetched:
-            auto_name = fetched
-            st.caption(f"💡 日本語社名を検出: **{fetched}**")
+    
+    if "last_searched_code" not in st.session_state:
+        st.session_state["last_searched_code"] = ""
+        
+    if len(clean_code) == 4 and st.session_state["last_searched_code"] != clean_code:
+        st.session_state["last_searched_code"] = clean_code
+        fetched_name = fetch_company_name_jp(clean_code)
+        if fetched_name:
+            st.session_state["dlg_name_input"] = fetched_name
             
-    input_name = st.text_input("銘柄名 / 会社名", value=auto_name, placeholder="例: トヨタ自動車", key="dlg_name")
+    input_name = st.text_input("銘柄名 / 会社名", placeholder="例: トヨタ自動車", key="dlg_name_input")
     input_shares = st.number_input("株数", min_value=1, value=100, step=100)
     input_price = st.number_input("取引単価 (円)", min_value=1.0, value=1000.0, step=10.0)
     input_date = st.date_input("取引日付", datetime.now())
@@ -266,14 +270,13 @@ def open_trade_input_dialog(default_member, members):
                     total_amount
                 ]
                 target_sheet.append_row(row_data)
-                st.cache_data.clear() # キャッシュクリアして即時反映
+                st.cache_data.clear()
                 st.success(f"✅ {input_member} に {input_name} ({input_type}) を追加しました！")
                 st.rerun()
             except Exception as e:
                 st.error(f"登録エラー: {e}")
 
 try:
-    # 全シートデータを一括ロード (60秒キャッシュ適用)
     all_sheets_data = fetch_all_sheets_data(SPREADSHEET_ID)
     all_worksheets = list(all_sheets_data.keys())
     members = [name for name in all_worksheets if name not in SYSTEM_SHEETS and name.strip() != '']
@@ -437,7 +440,7 @@ try:
             st.error(f"ランキング計算エラー: {e}")
 
     # =========================================================================
-    # TAB 2: 個人別詳細
+    # TAB 2: 個人別詳細 (サマリー＆保有銘柄の背景色一括統一 ＆ スマホ編集対応)
     # =========================================================================
     with tab_personal:
         st.header("👤 個人別ポートフォリオ詳細")
@@ -456,15 +459,26 @@ try:
             mem_idx = members.index(selected_member) if selected_member in members else 0
             color_info = MEMBER_COLORS[mem_idx % len(MEMBER_COLORS)]
             
+            # 💡 サマリー・カード・テーブルまで全て包み込む背景色CSSスタイリング
             st.markdown(f"""
                 <style>
-                .member-theme-box {{
-                    background-color: {color_info['bg_hex']};
+                .member-theme-container-{mem_idx} {{
+                    background-color: {color_info['bg_hex']} !important;
                     padding: 24px;
                     border-radius: 16px;
                     border-left: 8px solid {color_info['border']};
                     margin-top: 10px;
                     margin-bottom: 20px;
+                }}
+                .member-theme-container-{mem_idx} [data-testid="stMetric"] {{
+                    background-color: rgba(255, 255, 255, 0.75) !important;
+                    padding: 12px;
+                    border-radius: 10px;
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+                }}
+                .member-theme-container-{mem_idx} table {{
+                    background-color: rgba(255, 255, 255, 0.85) !important;
+                    border-radius: 8px;
                 }}
                 </style>
             """, unsafe_allow_html=True)
@@ -526,8 +540,10 @@ try:
                 total_profit = total_assets - INITIAL_CAPITAL
                 total_profit_rate = (total_profit / INITIAL_CAPITAL) * 100
                 
-                st.markdown(f'<div class="member-theme-box">', unsafe_allow_html=True)
+                # 💡 テーマ色背景コンテナ（全体を確実に包み込む）
+                st.markdown(f'<div class="member-theme-container-{mem_idx}">', unsafe_allow_html=True)
                 
+                # 📊 資産状況サマリー
                 st.subheader(f"📊 {selected_member} の資産状況サマリー")
                 col1, col2, col3, col4, col5 = st.columns(5)
                 col1.metric("合計総資産", "¥{:,.0f}".format(total_assets), delta="{:+,.0f}円 ({:+.2f}%)".format(total_profit, total_profit_rate))
@@ -548,16 +564,33 @@ try:
                 st.markdown('</div>', unsafe_allow_html=True)
                 
                 # ----------------------------------------------------
-                # ✏️ 取引履歴の直接編集機能 (st.data_editor)
+                # ✏️ 取引履歴の直接編集機能 (スマホ最適化: カレンダー・リスト選択対応)
                 # ----------------------------------------------------
                 st.markdown("<br>", unsafe_allow_html=True)
                 with st.expander("📜 全取引履歴の編集／閲覧", expanded=False):
-                    st.caption("💡 表のセルをダブルクリックして値を修正・追加し、下の「💾 変更を保存する」を押すとスプレッドシートに直接反映されます。")
+                    st.caption("💡 スマホでも操作可能：日付をタップでカレンダー、種別をタップでドロップダウン選択できます。編集後は「💾 変更を保存する」を押してください。")
                     
                     df_edit_src = df_trade.iloc[:, :7].copy()
+                    df_edit_src.columns = ["日付", "種別", "銘柄名", "コード", "株数", "単価", "金額"]
                     
+                    # 型のクレンジング
+                    df_edit_src["日付"] = pd.to_datetime(df_edit_src["日付"], errors='coerce').dt.date
+                    df_edit_src["株数"] = pd.to_numeric(df_edit_src["株数"].apply(clean_number), errors='coerce').fillna(0).astype(int)
+                    df_edit_src["単価"] = pd.to_numeric(df_edit_src["単価"].apply(clean_number), errors='coerce').fillna(0.0)
+                    df_edit_src["金額"] = df_edit_src["株数"] * df_edit_src["単価"]
+                    
+                    # 💡 スマホに最適化された column_config 設定
                     edited_df = st.data_editor(
                         df_edit_src,
+                        column_config={
+                            "日付": st.column_config.DateColumn("日付", format="YYYY/MM/DD", required=True),
+                            "種別": st.column_config.SelectboxColumn("種別", options=["買い", "売り"], required=True),
+                            "銘柄名": st.column_config.TextColumn("銘柄名", required=True),
+                            "コード": st.column_config.TextColumn("コード", required=True),
+                            "株数": st.column_config.NumberColumn("株数", min_value=1, step=100, format="%d"),
+                            "単価": st.column_config.NumberColumn("単価 (円)", min_value=1, step=10, format="¥%d"),
+                            "金額": st.column_config.NumberColumn("金額 (自動計算)", format="¥%d", disabled=True),
+                        },
                         num_rows="dynamic",
                         use_container_width=True,
                         key=f"editor_{selected_member}"
@@ -569,14 +602,19 @@ try:
                             target_sheet = sh.worksheet(selected_member)
                             all_vals = state["all_values"]
                             
-                            new_rows = edited_df.fillna("").values.tolist()
+                            # 日付を YYYY/MM/DD フォーマットに整えて書き込み形式に変換
+                            save_df = edited_df.copy()
+                            save_df["日付"] = pd.to_datetime(save_df["日付"]).dt.strftime("%Y/%m/%d")
+                            save_df["金額"] = save_df["株数"] * save_df["単価"]
+                            
+                            new_rows = save_df.fillna("").values.tolist()
                             max_r = max(len(all_vals), len(new_rows) + 5)
                             
                             target_sheet.batch_clear([f"A2:G{max_r}"])
                             if new_rows:
                                 target_sheet.update(f"A2:G{len(new_rows)+1}", new_rows)
                                 
-                            st.cache_data.clear() # キャッシュクリアして即時反映
+                            st.cache_data.clear()
                             st.success("✅ 取引履歴の変更を反映しました！")
                             st.rerun()
                         except Exception as ex:
