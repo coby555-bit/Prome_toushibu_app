@@ -2,6 +2,7 @@ import streamlit as st
 import gspread
 import pandas as pd
 import yfinance as yf
+import altair as alt
 import re
 from google.oauth2.service_account import Credentials
 
@@ -72,7 +73,6 @@ def color_text_html(val, is_currency=True, is_percent=False):
         else:
             text = "{:+,.0f}".format(f_val)
             
-        # ±0の場合は灰色
         if abs(f_val) < 0.0001:
             if is_currency: text = "¥0"
             elif is_percent: text = "0.00%"
@@ -181,13 +181,55 @@ try:
                 df_log['利益率'] = pd.to_numeric(df_log['利益率'], errors='coerce')
                 df_log = df_log.dropna(subset=['日付', 'メンバー', '総資産'])
                 
+                # --- 1. 資産推移チャート（全員のポップアップ表示対応） ---
                 st.subheader("📈 全員の資産推移グラフ")
-                df_pivot = df_log.pivot(index='日付', columns='メンバー', values='総資産')
-                st.line_chart(df_pivot)
                 
+                # 💡 Altairを使用してマウスホバー時に全メンバーの金額を表示
+                # 縦軸のフォーマット用
+                df_log['総資産(フォーマット)'] = df_log['総資産'].apply(lambda x: f"¥{int(x):,}")
+                
+                # ピボットデータからツールチップ項目を作成
+                df_pivot_log = df_log.pivot(index='日付', columns='メンバー', values='総資産(フォーマット)').reset_index()
+                
+                # チャート結合用のロングフォーマット
+                chart_base = alt.Chart(df_log).encode(
+                    x=alt.X('日付:N', title='日付'),
+                    y=alt.Y('総資産:Q', title='総資産 (円)', scale=alt.Scale(zero=False)),
+                    color=alt.Color('メンバー:N', title='メンバー')
+                )
+                
+                # 折れ線
+                lines = chart_base.mark_line(strokeWidth=3)
+                
+                # マウスホバー位置を特定するための透明な選択領域
+                nearest = alt.selection_point(nearest=True, on='pointerover', fields=['日付'], empty=False)
+                
+                # ポップアップ（ツールチップ）の要素を設定
+                tooltip_cols = [alt.Tooltip('日付:N')] + [alt.Tooltip(f'{m}:N', title=m) for m in members if m in df_pivot_log.columns]
+                
+                selectors = alt.Chart(df_pivot_log).mark_rect().encode(
+                    x='日付:N',
+                    opacity=alt.value(0),
+                    tooltip=tooltip_cols
+                ).add_params(nearest)
+                
+                # ポイント表示
+                points = chart_base.mark_point(size=50).encode(
+                    opacity=alt.condition(nearest, alt.value(1), alt.value(0))
+                )
+                
+                # 垂直線
+                rules = alt.Chart(df_pivot_log).mark_rule(color='gray', strokeDash=[2, 2]).encode(
+                    x='日付:N'
+                ).transform_filter(nearest)
+                
+                # グラフを重ね合わせて描画
+                final_chart = alt.layer(lines, selectors, points, rules).properties(height=400).interactive()
+                st.altair_chart(final_chart, use_container_width=True)
+                
+                # --- 2. 最新資産ランキング ---
                 st.subheader("🏆 最新資産ランキング")
                 
-                # 各メンバーのリアルタイムデータをまとめて計算してランキング表を作成
                 all_member_states = {}
                 all_active_codes = set()
                 
@@ -235,11 +277,9 @@ try:
                     df_rank = pd.DataFrame(ranking_data)
                     df_rank = df_rank.sort_values(by="総資産数値", ascending=False).reset_index(drop=True)
                     
-                    # 💡 1位🥇, 2位🥈, 3位🥉 のメダルアイコン表示
                     medal_icons = ["🥇 1位", "🥈 2位", "🥉 3位"]
                     df_rank["順位"] = [medal_icons[i] if i < 3 else f"{i+1}位" for i in range(len(df_rank))]
                     
-                    # カラムの並び順を調整
                     display_cols = ["順位", "メンバー", "総資産", "実現損益", "含み損益", "総損益", "利益率", "買付余力"]
                     df_rank_display = df_rank[display_cols]
                     
@@ -271,7 +311,7 @@ try:
                 
                 total_stock_eval = 0.0
                 total_unrealized_pnl = 0.0
-                total_day_diff = 0.0 # 前日比の合計値
+                total_day_diff = 0.0
                 
                 portfolio_data = []
                 
@@ -314,9 +354,7 @@ try:
                 total_profit = total_assets - INITIAL_CAPITAL
                 total_profit_rate = (total_profit / INITIAL_CAPITAL) * 100
                 
-                # ----------------------------------------------------
-                # 📊 資産状況サマリー（5列カード表示）
-                # ----------------------------------------------------
+                # 📊 資産状況サマリー
                 st.markdown("<br>", unsafe_allow_html=True)
                 st.subheader(f"📊 {selected_member} の資産状況サマリー")
                 col1, col2, col3, col4, col5 = st.columns(5)
@@ -324,7 +362,6 @@ try:
                 col2.metric("買付余力 (現金)", "¥{:,.0f}".format(cash_balance))
                 col3.metric("実現損益 (税引後)", "¥{:,.0f}".format(realized_pnl_post_tax))
                 col4.metric("含み損益 (評価益)", "¥{:,.0f}".format(total_unrealized_pnl))
-                # 💡 前日比の合計値を追加表示
                 col5.metric("前日比 (合計)", "¥{:,.0f}".format(total_day_diff), delta="{:+,.0f}円".format(total_day_diff))
                 
                 st.markdown("---")
