@@ -110,7 +110,7 @@ try:
                     df_latest['順位'] = df_latest.index + 1
                     df_latest['総損益'] = df_latest['総資産'] - 1000000
                     
-                    # 表示用にフォーマット
+                    # 💡 表示用にフォーマット (修正箇所: + を前に記述)
                     ranking_display = []
                     for _, row in df_latest.iterrows():
                         pnl = row['総損益']
@@ -121,9 +121,9 @@ try:
                             "順位": f"{int(row['順位'])}位",
                             "メンバー": row['メンバー'],
                             "総資産": f"¥{int(row['総資産']):,}",
-                            "総損益": f"¥{int(pnl):,+}",
+                            "総損益": f"¥{pnl:+,.0f}",
                             "利益率": f"{row['利益率']:+.2f}%",
-                            "前日比": f"¥{int(diff):,+} ({diff_rate:+.2f}%)"
+                            "前日比": f"¥{diff:+,.0f} ({diff_rate:+.2f}%)"
                         })
                     
                     st.dataframe(pd.DataFrame(ranking_display), use_container_width=True)
