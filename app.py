@@ -718,7 +718,7 @@ try:
                                 }
                                 
                                 data = {
-                                    "model": "llama-3.1-70b-versatile",
+                                    "model": "llama-3.3-70b-versatile",
                                     "messages": [
                                         {"role": "system", "content": "あなたはプロの投資アドバイザーであり、投資部の顧問です。ユーモアを交えつつ、的確で優しいアドバイスを提供してください。"},
                                         {"role": "user", "content": prompt_text}
