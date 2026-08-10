@@ -163,7 +163,7 @@ try:
     members = [name for name in all_worksheets if name not in SYSTEM_SHEETS and name.strip() != '']
 
     # =========================================================================
-    # 提案３：投資部ルール ＆ 更新履歴セクション
+    # 投資部ルール ＆ 更新履歴セクション
     # =========================================================================
     with st.expander("📋 投資部ルール ＆ 更新履歴を表示／編集", expanded=False):
         try:
@@ -181,43 +181,51 @@ try:
             rule_values = rule_sheet.get_all_values()
             
             if len(rule_values) > 1:
-                df_rules = pd.DataFrame(rule_values[1:], columns=['日時', '本文', '更新メモ'])
-                latest_rule = df_rules.iloc[-1]
+                # 💡 エラー防止: 1行目以降のデータから「左側の3列分のみ」を確実に切り出して取得
+                raw_rule_rows = [r[:3] + [''] * (3 - len(r[:3])) for r in rule_values[1:]]
+                df_rules = pd.DataFrame(raw_rule_rows, columns=['日時', '本文', '更新メモ'])
                 
-                col_rule1, col_rule2 = st.columns([2, 1])
+                # 日時が空でない行のみ抽出
+                df_rules = df_rules[df_rules['日時'] != ''].copy()
                 
-                with col_rule1:
-                    st.subheader("📜 最新の投資部ルール")
-                    st.caption(f"最終更新: {latest_rule['日時']} （メモ: {latest_rule['更新メモ']}）")
-                    st.info(latest_rule['本文'])
+                if not df_rules.empty:
+                    latest_rule = df_rules.iloc[-1]
                     
-                with col_rule2:
-                    st.subheader("✏️ ルールの更新")
-                    with st.form("rule_edit_form"):
-                        new_rule_text = st.text_area("新しいルール本文", value=latest_rule['本文'], height=120)
-                        rule_note = st.text_input("更新メモ", value="ルール更新")
-                        submit_rule = st.form_submit_button("ルールを保存する")
+                    col_rule1, col_rule2 = st.columns([2, 1])
+                    
+                    with col_rule1:
+                        st.subheader("📜 最新の投資部ルール")
+                        st.caption(f"最終更新: {latest_rule['日時']} （メモ: {latest_rule['更新メモ']}）")
+                        st.info(latest_rule['本文'])
                         
-                        if submit_rule:
-                            if new_rule_text.strip():
-                                now_str = datetime.now().strftime("%Y/%m/%d %H:%M")
-                                rule_sheet.append_row([now_str, new_rule_text, rule_note])
-                                st.success("ルールを正常に更新しました！")
-                                st.rerun()
-                            else:
-                                st.error("ルール本文を入力してください。")
-                                
-                # 過去の履歴一覧
-                st.markdown("---")
-                st.write("📜 **過去のルール更新履歴**")
-                st.dataframe(df_rules.iloc[::-1], use_container_width=True)
+                    with col_rule2:
+                        st.subheader("✏️ ルールの更新")
+                        with st.form("rule_edit_form"):
+                            new_rule_text = st.text_area("新しいルール本文", value=latest_rule['本文'], height=120)
+                            rule_note = st.text_input("更新メモ", value="ルール更新")
+                            submit_rule = st.form_submit_button("ルールを保存する")
+                            
+                            if submit_rule:
+                                if new_rule_text.strip():
+                                    now_str = datetime.now().strftime("%Y/%m/%d %H:%M")
+                                    rule_sheet.append_row([now_str, new_rule_text, rule_note])
+                                    st.success("ルールを正常に更新しました！")
+                                    st.rerun()
+                                else:
+                                    st.error("ルール本文を入力してください。")
+                                    
+                    st.markdown("---")
+                    st.write("📜 **過去のルール更新履歴**")
+                    st.dataframe(df_rules.iloc[::-1], use_container_width=True)
+                else:
+                    st.info("RuleDataに有効なルール履歴がありません。")
             else:
                 st.info("RuleDataにデータがありません。")
         except Exception as e:
             st.error(f"ルールデータ読み込みエラー: {e}")
 
     # =========================================================================
-    # 提案２：取引入力フォーム（サイドバー）
+    # 取引入力フォーム（サイドバー）
     # =========================================================================
     st.sidebar.header("📝 取引の新規入力")
     with st.sidebar.form("trade_input_form", clear_on_submit=True):
@@ -243,7 +251,6 @@ try:
                     formatted_date = input_date.strftime("%Y/%m/%d")
                     total_amount = input_shares * input_price
                     
-                    # 取引データの追記行作成
                     row_data = [
                         formatted_date,
                         input_type,
