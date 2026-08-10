@@ -4,6 +4,7 @@ import pandas as pd
 import yfinance as yf
 import altair as alt
 import re
+from datetime import datetime
 from google.oauth2.service_account import Credentials
 
 # ページの基本設定
@@ -160,8 +161,107 @@ try:
     sh = get_spreadsheet()
     all_worksheets = [ws.title for ws in sh.worksheets()]
     members = [name for name in all_worksheets if name not in SYSTEM_SHEETS and name.strip() != '']
-    
+
+    # =========================================================================
+    # 提案３：投資部ルール ＆ 更新履歴セクション
+    # =========================================================================
+    with st.expander("📋 投資部ルール ＆ 更新履歴を表示／編集", expanded=False):
+        try:
+            try:
+                rule_sheet = sh.worksheet('RuleData')
+            except Exception:
+                rule_sheet = sh.add_worksheet(title='RuleData', rows=100, cols=3)
+                rule_sheet.append_row(['日時', '本文', '更新メモ'])
+                rule_sheet.append_row([
+                    '2026/06/01 00:00',
+                    '利益の割合でご馳走の支払い率を決める\nお店は一位の人が決め、一万円以上のコースとする\n配当金と優待は入れない\n国内個別株のみ',
+                    '初期ルール制定'
+                ])
+
+            rule_values = rule_sheet.get_all_values()
+            
+            if len(rule_values) > 1:
+                df_rules = pd.DataFrame(rule_values[1:], columns=['日時', '本文', '更新メモ'])
+                latest_rule = df_rules.iloc[-1]
+                
+                col_rule1, col_rule2 = st.columns([2, 1])
+                
+                with col_rule1:
+                    st.subheader("📜 最新の投資部ルール")
+                    st.caption(f"最終更新: {latest_rule['日時']} （メモ: {latest_rule['更新メモ']}）")
+                    st.info(latest_rule['本文'])
+                    
+                with col_rule2:
+                    st.subheader("✏️ ルールの更新")
+                    with st.form("rule_edit_form"):
+                        new_rule_text = st.text_area("新しいルール本文", value=latest_rule['本文'], height=120)
+                        rule_note = st.text_input("更新メモ", value="ルール更新")
+                        submit_rule = st.form_submit_button("ルールを保存する")
+                        
+                        if submit_rule:
+                            if new_rule_text.strip():
+                                now_str = datetime.now().strftime("%Y/%m/%d %H:%M")
+                                rule_sheet.append_row([now_str, new_rule_text, rule_note])
+                                st.success("ルールを正常に更新しました！")
+                                st.rerun()
+                            else:
+                                st.error("ルール本文を入力してください。")
+                                
+                # 過去の履歴一覧
+                st.markdown("---")
+                st.write("📜 **過去のルール更新履歴**")
+                st.dataframe(df_rules.iloc[::-1], use_container_width=True)
+            else:
+                st.info("RuleDataにデータがありません。")
+        except Exception as e:
+            st.error(f"ルールデータ読み込みエラー: {e}")
+
+    # =========================================================================
+    # 提案２：取引入力フォーム（サイドバー）
+    # =========================================================================
+    st.sidebar.header("📝 取引の新規入力")
+    with st.sidebar.form("trade_input_form", clear_on_submit=True):
+        input_member = st.selectbox("メンバー", members)
+        input_type = st.selectbox("売買種別", ["買い", "売り"])
+        input_code = st.text_input("銘柄コード (4桁)", placeholder="例: 7203")
+        input_name = st.text_input("銘柄名 / 会社名", placeholder="例: トヨタ自動車")
+        input_shares = st.number_input("株数", min_value=1, value=100, step=100)
+        input_price = st.number_input("取引単価 (円)", min_value=1.0, value=1000.0, step=10.0)
+        input_date = st.date_input("取引日付", datetime.now())
+        
+        submit_trade = st.form_submit_button("🚀 取引を登録する")
+        
+        if submit_trade:
+            clean_code = re.sub(r'[^\d]', '', str(input_code))
+            if not clean_code or len(clean_code) < 4:
+                st.sidebar.error("正しい4桁の銘柄コードを入力してください。")
+            elif not input_name.strip():
+                st.sidebar.error("銘柄名を入力してください。")
+            else:
+                try:
+                    target_sheet = sh.worksheet(input_member)
+                    formatted_date = input_date.strftime("%Y/%m/%d")
+                    total_amount = input_shares * input_price
+                    
+                    # 取引データの追記行作成
+                    row_data = [
+                        formatted_date,
+                        input_type,
+                        input_name.strip(),
+                        clean_code,
+                        input_shares,
+                        input_price,
+                        total_amount
+                    ]
+                    target_sheet.append_row(row_data)
+                    st.sidebar.success(f"✅ {input_member} に {input_name} ({input_type}) を追加しました！")
+                    st.rerun()
+                except Exception as e:
+                    st.sidebar.error(f"登録エラー: {e}")
+
+    # =========================================================================
     # メインタブの作成
+    # =========================================================================
     tab_race, tab_personal = st.tabs(["🏆 実績 ＆ 全体ランキング", "👤 個人別詳細"])
 
     # =========================================================================
@@ -184,27 +284,17 @@ try:
                 # --- 1. 資産推移チャート（全員のポップアップ表示対応） ---
                 st.subheader("📈 全員の資産推移グラフ")
                 
-                # 💡 Altairを使用してマウスホバー時に全メンバーの金額を表示
-                # 縦軸のフォーマット用
                 df_log['総資産(フォーマット)'] = df_log['総資産'].apply(lambda x: f"¥{int(x):,}")
-                
-                # ピボットデータからツールチップ項目を作成
                 df_pivot_log = df_log.pivot(index='日付', columns='メンバー', values='総資産(フォーマット)').reset_index()
                 
-                # チャート結合用のロングフォーマット
                 chart_base = alt.Chart(df_log).encode(
                     x=alt.X('日付:N', title='日付'),
                     y=alt.Y('総資産:Q', title='総資産 (円)', scale=alt.Scale(zero=False)),
                     color=alt.Color('メンバー:N', title='メンバー')
                 )
                 
-                # 折れ線
                 lines = chart_base.mark_line(strokeWidth=3)
-                
-                # マウスホバー位置を特定するための透明な選択領域
                 nearest = alt.selection_point(nearest=True, on='pointerover', fields=['日付'], empty=False)
-                
-                # ポップアップ（ツールチップ）の要素を設定
                 tooltip_cols = [alt.Tooltip('日付:N')] + [alt.Tooltip(f'{m}:N', title=m) for m in members if m in df_pivot_log.columns]
                 
                 selectors = alt.Chart(df_pivot_log).mark_rect().encode(
@@ -213,17 +303,14 @@ try:
                     tooltip=tooltip_cols
                 ).add_params(nearest)
                 
-                # ポイント表示
                 points = chart_base.mark_point(size=50).encode(
                     opacity=alt.condition(nearest, alt.value(1), alt.value(0))
                 )
                 
-                # 垂直線
                 rules = alt.Chart(df_pivot_log).mark_rule(color='gray', strokeDash=[2, 2]).encode(
                     x='日付:N'
                 ).transform_filter(nearest)
                 
-                # グラフを重ね合わせて描画
                 final_chart = alt.layer(lines, selectors, points, rules).properties(height=400).interactive()
                 st.altair_chart(final_chart, use_container_width=True)
                 
