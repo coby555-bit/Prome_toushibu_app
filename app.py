@@ -4,12 +4,23 @@ import pandas as pd
 import yfinance as yf
 import altair as alt
 import re
+import urllib.request
 from datetime import datetime
 from google.oauth2.service_account import Credentials
 
 # ページの基本設定
 st.set_page_config(page_title="投資部 100万円投資レース", layout="wide")
 st.title("📊 投資部 100万円投資レース")
+
+# 💡 メンバーカラーのパレット定義 (メイン色 / 淡い背景色)
+MEMBER_COLORS = [
+    {"main": "#0d6efd", "bg_hex": "#f0f4ff", "border": "#0d6efd"}, # メンバー1: ブルー
+    {"main": "#dc3545", "bg_hex": "#fff0f2", "border": "#dc3545"}, # メンバー2: レッド
+    {"main": "#198754", "bg_hex": "#f0fff4", "border": "#198754"}, # メンバー3: グリーン
+    {"main": "#d39e00", "bg_hex": "#fffdf0", "border": "#ffc107"}, # メンバー4: イエロー
+    {"main": "#0dcaf0", "bg_hex": "#f0fcff", "border": "#0dcaf0"}, # メンバー5: シアン
+    {"main": "#6f42c1", "bg_hex": "#f8f0ff", "border": "#6f42c1"}  # メンバー6: パープル
+]
 
 # 💡 Google認証のキャッシュ処理
 @st.cache_resource
@@ -53,18 +64,19 @@ def fetch_stock_details(symbols):
         
     return detail_map
 
-# 💡 銘柄コードから会社名を自動取得する関数
-@st.cache_data(ttl=3600)
-def fetch_company_name(code):
+# 💡 日本語の会社名を自動取得する関数（Yahoo! Finance JP スクレイピング）
+@st.cache_data(ttl=86400)
+def fetch_company_name_jp(code):
     clean_code = re.sub(r'[^\d]', '', str(code))
     if len(clean_code) == 4:
         try:
-            ticker = yf.Ticker(f"{clean_code}.T")
-            info = ticker.info
-            name = info.get('longName') or info.get('shortName') or info.get('displayTitle')
-            if name:
-                # 日本語の社名が英語で返ってきた場合などの簡易クレンジング
-                return name.replace('Corporation', '').replace('Co., Ltd.', '').strip()
+            url = f"https://finance.yahoo.co.jp/quote/{clean_code}.T"
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+            html = urllib.request.urlopen(req, timeout=3).read().decode('utf-8')
+            m = re.search(r'<title>(.*?)【', html)
+            if m:
+                name = m.group(1).replace('(株)', '').replace('（株）', '').strip()
+                return name
         except Exception:
             pass
     return ""
@@ -160,6 +172,7 @@ def calculate_member_state(sh, member_name):
         active_codes = [code for code, data in holdings.items() if data["shares"] > 0]
         
         return {
+            "all_values": all_values,
             "df_trade": df_trade,
             "holdings": holdings,
             "active_codes": active_codes,
@@ -188,7 +201,7 @@ def open_rule_edit_dialog(sh, current_text):
             else:
                 st.error("ルール本文を入力してください。")
 
-# 💡 取引入力用モーダルダイアログ (会社名自動取得機能付き)
+# 💡 取引入力用モーダルダイアログ (日本語会社名自動取得機能付き)
 @st.dialog("📝 取引の新規入力")
 def open_trade_input_dialog(sh, default_member, members):
     input_member = st.selectbox("メンバー", members, index=members.index(default_member) if default_member in members else 0)
@@ -196,14 +209,14 @@ def open_trade_input_dialog(sh, default_member, members):
     
     input_code = st.text_input("銘柄コード (4桁)", placeholder="例: 7203", key="dlg_code")
     
-    # 自動社名取得
+    # 💡 日本語会社名の自動取得
     auto_name = ""
     clean_code = re.sub(r'[^\d]', '', str(input_code))
     if len(clean_code) == 4:
-        fetched = fetch_company_name(clean_code)
+        fetched = fetch_company_name_jp(clean_code)
         if fetched:
             auto_name = fetched
-            st.caption(f"💡 自動検出された社名: **{fetched}**")
+            st.caption(f"💡 日本語社名を検出: **{fetched}**")
             
     input_name = st.text_input("銘柄名 / 会社名", value=auto_name, placeholder="例: トヨタ自動車", key="dlg_name")
     input_shares = st.number_input("株数", min_value=1, value=100, step=100)
@@ -244,6 +257,9 @@ try:
     all_worksheets = [ws.title for ws in sh.worksheets()]
     members = [name for name in all_worksheets if name not in SYSTEM_SHEETS and name.strip() != '']
 
+    # 💡 メンバーごとの固定カラーリスト
+    main_color_list = [MEMBER_COLORS[i % len(MEMBER_COLORS)]["main"] for i in range(len(members))]
+
     # =========================================================================
     # 投資部ルール ＆ 更新履歴セクション
     # =========================================================================
@@ -275,7 +291,6 @@ try:
                         st.subheader("📜 最新の投資部ルール")
                         st.caption(f"最終更新: {latest_rule['日時']}")
                         
-                        # 💡 ルール本文を箇条書きに変換して表示
                         lines = [line.strip() for line in latest_rule['本文'].split('\n') if line.strip()]
                         bullet_list = "\n".join([f"* {line}" for line in lines])
                         st.markdown(bullet_list)
@@ -287,7 +302,6 @@ try:
                             
                     st.markdown("---")
                     st.write("📜 **過去のルール更新日時一覧**")
-                    # 💡 日時のみの一覧を表示
                     df_history_dates = df_rules[['日時']].iloc[::-1].reset_index(drop=True)
                     st.dataframe(df_history_dates, use_container_width=True)
                 else:
@@ -319,16 +333,17 @@ try:
                 df_log['利益率'] = pd.to_numeric(df_log['利益率'], errors='coerce')
                 df_log = df_log.dropna(subset=['日付', 'メンバー', '総資産'])
                 
-                # --- 1. 資産推移チャート ---
+                # --- 1. 資産推移チャート（カラー統一対応） ---
                 st.subheader("📈 全員の資産推移グラフ")
                 
                 df_log['総資産(フォーマット)'] = df_log['総資産'].apply(lambda x: f"¥{int(x):,}")
                 df_pivot_log = df_log.pivot(index='日付', columns='メンバー', values='総資産(フォーマット)').reset_index()
                 
+                # 💡 メンバーごとの固定カラーパレットをグラフにスケール適用
                 chart_base = alt.Chart(df_log).encode(
                     x=alt.X('日付:N', title='日付'),
                     y=alt.Y('総資産:Q', title='総資産 (円)', scale=alt.Scale(zero=False)),
-                    color=alt.Color('メンバー:N', title='メンバー')
+                    color=alt.Color('メンバー:N', title='メンバー', scale=alt.Scale(domain=members, range=main_color_list))
                 )
                 
                 lines = chart_base.mark_line(strokeWidth=3)
@@ -415,7 +430,7 @@ try:
             st.error(f"ランキング計算エラー: {e}")
 
     # =========================================================================
-    # TAB 2: 個人別詳細
+    # TAB 2: 個人別詳細 (背景色連動 ＆ 編集機能)
     # =========================================================================
     with tab_personal:
         st.header("👤 個人別ポートフォリオ詳細")
@@ -427,11 +442,28 @@ try:
             
         with col_btn_add:
             st.markdown("<br>", unsafe_allow_html=True)
-            # 💡 個人別タブ内に「＋ 取引を入力する」ボタンを配置
             if st.button("➕ 取引を入力する", type="primary"):
                 open_trade_input_dialog(sh, selected_member, members)
         
         if selected_member:
+            # 💡 選択されたメンバーのカラー情報を特定
+            mem_idx = members.index(selected_member) if selected_member in members else 0
+            color_info = MEMBER_COLORS[mem_idx % len(MEMBER_COLORS)]
+            
+            # 💡 メンバーカラーを背景色に適用するカスタムCSS
+            st.markdown(f"""
+                <style>
+                .member-theme-box {{
+                    background-color: {color_info['bg_hex']};
+                    padding: 24px;
+                    border-radius: 16px;
+                    border-left: 8px solid {color_info['border']};
+                    margin-top: 10px;
+                    margin-bottom: 20px;
+                }}
+                </style>
+            """, unsafe_allow_html=True)
+            
             state = calculate_member_state(sh, selected_member)
             
             if state:
@@ -488,8 +520,10 @@ try:
                 total_profit = total_assets - INITIAL_CAPITAL
                 total_profit_rate = (total_profit / INITIAL_CAPITAL) * 100
                 
+                # 💡 テーマカラー背景のコンテナ枠でサマリーと保有銘柄を包む
+                st.markdown(f'<div class="member-theme-box">', unsafe_allow_html=True)
+                
                 # 📊 資産状況サマリー
-                st.markdown("<br>", unsafe_allow_html=True)
                 st.subheader(f"📊 {selected_member} の資産状況サマリー")
                 col1, col2, col3, col4, col5 = st.columns(5)
                 col1.metric("合計総資産", "¥{:,.0f}".format(total_assets), delta="{:+,.0f}円 ({:+.2f}%)".format(total_profit, total_profit_rate))
@@ -506,10 +540,43 @@ try:
                     st.write(df_port.to_html(escape=False, index=False), unsafe_allow_html=True)
                 else:
                     st.info("現在保有中の銘柄はありません。")
+                    
+                st.markdown('</div>', unsafe_allow_html=True)
                 
+                # ----------------------------------------------------
+                # ✏️ 取引履歴の直接編集機能 (st.data_editor)
+                # ----------------------------------------------------
                 st.markdown("<br>", unsafe_allow_html=True)
-                with st.expander("📜 全取引履歴を表示／非表示"):
-                    st.dataframe(df_trade.iloc[:, :7], use_container_width=True)
+                with st.expander("📜 全取引履歴の編集／閲覧", expanded=False):
+                    st.caption("💡 表のセルをダブルクリックして値を修正・追加し、下の「💾 変更を保存する」を押すとスプレッドシートに直接反映されます。")
+                    
+                    df_edit_src = df_trade.iloc[:, :7].copy()
+                    
+                    # 取引履歴インタラクティブ編集コンポーネント
+                    edited_df = st.data_editor(
+                        df_edit_src,
+                        num_rows="dynamic",
+                        use_container_width=True,
+                        key=f"editor_{selected_member}"
+                    )
+                    
+                    if st.button(f"💾 {selected_member} の取引履歴を保存する", type="primary"):
+                        try:
+                            target_sheet = sh.worksheet(selected_member)
+                            all_vals = state["all_values"]
+                            
+                            # A2:G範囲を更新
+                            new_rows = edited_df.fillna("").values.tolist()
+                            max_r = max(len(all_vals), len(new_rows) + 5)
+                            
+                            target_sheet.batch_clear([f"A2:G{max_r}"])
+                            if new_rows:
+                                target_sheet.update(f"A2:G{len(new_rows)+1}", new_rows)
+                                
+                            st.success("✅ 取引履歴の変更を反映しました！")
+                            st.rerun()
+                        except Exception as ex:
+                            st.error(f"保存エラー: {ex}")
             else:
                 st.info("取引データが見つからないか、形式が正しくありません。")
 
