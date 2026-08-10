@@ -640,8 +640,15 @@ try:
         st.header("🤖 AI ポートフォリオ診断 ＆ 相場アドバイス")
         st.markdown("最新のAIモデルがあなたのポートフォリオを分析し、バランス評価や今後の戦略をアドバイスします！")
         
-        st.info("💡 超高速の **Groq API** を使用します。[Groq Console](https://console.groq.com/keys) から無料のAPIキーを取得して入力してください。")
-        api_key = st.text_input("🔑 Groq API キー", type="password", placeholder="gsk_...")
+        # 💡 安全なAPIキーの読み込み処理
+        groq_secret_key = st.secrets.get("GROQ_API_KEY", "")
+        
+        if groq_secret_key:
+            api_key = groq_secret_key
+            st.success("✅ システムに安全なAPIキーが設定されています。")
+        else:
+            st.info("💡 Groq API キーが設定されていません。以下に入力するか、StreamlitのSecretsに設定してください。")
+            api_key = st.text_input("🔑 Groq API キー", type="password", placeholder="gsk_...")
         
         st.markdown("<br>", unsafe_allow_html=True)
         ai_member = st.radio("診断するメンバーを選択してください", members, horizontal=True, key="ai_radio")
