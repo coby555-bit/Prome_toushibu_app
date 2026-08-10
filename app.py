@@ -53,6 +53,22 @@ def fetch_stock_details(symbols):
         
     return detail_map
 
+# 💡 銘柄コードから会社名を自動取得する関数
+@st.cache_data(ttl=3600)
+def fetch_company_name(code):
+    clean_code = re.sub(r'[^\d]', '', str(code))
+    if len(clean_code) == 4:
+        try:
+            ticker = yf.Ticker(f"{clean_code}.T")
+            info = ticker.info
+            name = info.get('longName') or info.get('shortName') or info.get('displayTitle')
+            if name:
+                # 日本語の社名が英語で返ってきた場合などの簡易クレンジング
+                return name.replace('Corporation', '').replace('Co., Ltd.', '').strip()
+        except Exception:
+            pass
+    return ""
+
 # 💡 数値クレンジング用の補助関数
 def clean_number(val):
     if val is None:
@@ -154,6 +170,72 @@ def calculate_member_state(sh, member_name):
     except Exception:
         return None
 
+# 💡 ルール更新用モーダルダイアログ
+@st.dialog("✏️ 投資部ルールの更新")
+def open_rule_edit_dialog(sh, current_text):
+    with st.form("rule_edit_form_dialog"):
+        new_rule_text = st.text_area("新しいルール本文 (改行で箇条書きになります)", value=current_text, height=180)
+        rule_note = st.text_input("更新メモ", value="ルール更新")
+        submit_rule = st.form_submit_button("保存する", type="primary")
+        
+        if submit_rule:
+            if new_rule_text.strip():
+                now_str = datetime.now().strftime("%Y/%m/%d %H:%M")
+                rule_sheet = sh.worksheet('RuleData')
+                rule_sheet.append_row([now_str, new_rule_text, rule_note])
+                st.success("ルールを更新しました！")
+                st.rerun()
+            else:
+                st.error("ルール本文を入力してください。")
+
+# 💡 取引入力用モーダルダイアログ (会社名自動取得機能付き)
+@st.dialog("📝 取引の新規入力")
+def open_trade_input_dialog(sh, default_member, members):
+    input_member = st.selectbox("メンバー", members, index=members.index(default_member) if default_member in members else 0)
+    input_type = st.selectbox("売買種別", ["買い", "売り"])
+    
+    input_code = st.text_input("銘柄コード (4桁)", placeholder="例: 7203", key="dlg_code")
+    
+    # 自動社名取得
+    auto_name = ""
+    clean_code = re.sub(r'[^\d]', '', str(input_code))
+    if len(clean_code) == 4:
+        fetched = fetch_company_name(clean_code)
+        if fetched:
+            auto_name = fetched
+            st.caption(f"💡 自動検出された社名: **{fetched}**")
+            
+    input_name = st.text_input("銘柄名 / 会社名", value=auto_name, placeholder="例: トヨタ自動車", key="dlg_name")
+    input_shares = st.number_input("株数", min_value=1, value=100, step=100)
+    input_price = st.number_input("取引単価 (円)", min_value=1.0, value=1000.0, step=10.0)
+    input_date = st.date_input("取引日付", datetime.now())
+    
+    if st.button("🚀 取引を登録する", type="primary"):
+        if not clean_code or len(clean_code) < 4:
+            st.error("正しい4桁の銘柄コードを入力してください。")
+        elif not input_name.strip():
+            st.error("銘柄名を入力してください。")
+        else:
+            try:
+                target_sheet = sh.worksheet(input_member)
+                formatted_date = input_date.strftime("%Y/%m/%d")
+                total_amount = input_shares * input_price
+                
+                row_data = [
+                    formatted_date,
+                    input_type,
+                    input_name.strip(),
+                    clean_code,
+                    input_shares,
+                    input_price,
+                    total_amount
+                ]
+                target_sheet.append_row(row_data)
+                st.success(f"✅ {input_member} に {input_name} ({input_type}) を追加しました！")
+                st.rerun()
+            except Exception as e:
+                st.error(f"登録エラー: {e}")
+
 # システム用シート一覧
 SYSTEM_SHEETS = ['ダッシュボード', 'DailyLog', 'Temp', 'AppCache', 'PredictionCache', 'RuleData', 'PredictionHistory', 'ログ', '設定']
 
@@ -165,7 +247,7 @@ try:
     # =========================================================================
     # 投資部ルール ＆ 更新履歴セクション
     # =========================================================================
-    with st.expander("📋 投資部ルール ＆ 更新履歴を表示／編集", expanded=False):
+    with st.expander("📋 投資部ルール ＆ 更新履歴を表示", expanded=False):
         try:
             try:
                 rule_sheet = sh.worksheet('RuleData')
@@ -181,90 +263,39 @@ try:
             rule_values = rule_sheet.get_all_values()
             
             if len(rule_values) > 1:
-                # 💡 エラー防止: 1行目以降のデータから「左側の3列分のみ」を確実に切り出して取得
                 raw_rule_rows = [r[:3] + [''] * (3 - len(r[:3])) for r in rule_values[1:]]
                 df_rules = pd.DataFrame(raw_rule_rows, columns=['日時', '本文', '更新メモ'])
-                
-                # 日時が空でない行のみ抽出
                 df_rules = df_rules[df_rules['日時'] != ''].copy()
                 
                 if not df_rules.empty:
                     latest_rule = df_rules.iloc[-1]
                     
-                    col_rule1, col_rule2 = st.columns([2, 1])
-                    
-                    with col_rule1:
+                    col_r1, col_r2 = st.columns([3, 1])
+                    with col_r1:
                         st.subheader("📜 最新の投資部ルール")
-                        st.caption(f"最終更新: {latest_rule['日時']} （メモ: {latest_rule['更新メモ']}）")
-                        st.info(latest_rule['本文'])
+                        st.caption(f"最終更新: {latest_rule['日時']}")
                         
-                    with col_rule2:
-                        st.subheader("✏️ ルールの更新")
-                        with st.form("rule_edit_form"):
-                            new_rule_text = st.text_area("新しいルール本文", value=latest_rule['本文'], height=120)
-                            rule_note = st.text_input("更新メモ", value="ルール更新")
-                            submit_rule = st.form_submit_button("ルールを保存する")
+                        # 💡 ルール本文を箇条書きに変換して表示
+                        lines = [line.strip() for line in latest_rule['本文'].split('\n') if line.strip()]
+                        bullet_list = "\n".join([f"* {line}" for line in lines])
+                        st.markdown(bullet_list)
+                        
+                    with col_r2:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        if st.button("✏️ ルールを更新する", type="secondary"):
+                            open_rule_edit_dialog(sh, latest_rule['本文'])
                             
-                            if submit_rule:
-                                if new_rule_text.strip():
-                                    now_str = datetime.now().strftime("%Y/%m/%d %H:%M")
-                                    rule_sheet.append_row([now_str, new_rule_text, rule_note])
-                                    st.success("ルールを正常に更新しました！")
-                                    st.rerun()
-                                else:
-                                    st.error("ルール本文を入力してください。")
-                                    
                     st.markdown("---")
-                    st.write("📜 **過去のルール更新履歴**")
-                    st.dataframe(df_rules.iloc[::-1], use_container_width=True)
+                    st.write("📜 **過去のルール更新日時一覧**")
+                    # 💡 日時のみの一覧を表示
+                    df_history_dates = df_rules[['日時']].iloc[::-1].reset_index(drop=True)
+                    st.dataframe(df_history_dates, use_container_width=True)
                 else:
                     st.info("RuleDataに有効なルール履歴がありません。")
             else:
                 st.info("RuleDataにデータがありません。")
         except Exception as e:
             st.error(f"ルールデータ読み込みエラー: {e}")
-
-    # =========================================================================
-    # 取引入力フォーム（サイドバー）
-    # =========================================================================
-    st.sidebar.header("📝 取引の新規入力")
-    with st.sidebar.form("trade_input_form", clear_on_submit=True):
-        input_member = st.selectbox("メンバー", members)
-        input_type = st.selectbox("売買種別", ["買い", "売り"])
-        input_code = st.text_input("銘柄コード (4桁)", placeholder="例: 7203")
-        input_name = st.text_input("銘柄名 / 会社名", placeholder="例: トヨタ自動車")
-        input_shares = st.number_input("株数", min_value=1, value=100, step=100)
-        input_price = st.number_input("取引単価 (円)", min_value=1.0, value=1000.0, step=10.0)
-        input_date = st.date_input("取引日付", datetime.now())
-        
-        submit_trade = st.form_submit_button("🚀 取引を登録する")
-        
-        if submit_trade:
-            clean_code = re.sub(r'[^\d]', '', str(input_code))
-            if not clean_code or len(clean_code) < 4:
-                st.sidebar.error("正しい4桁の銘柄コードを入力してください。")
-            elif not input_name.strip():
-                st.sidebar.error("銘柄名を入力してください。")
-            else:
-                try:
-                    target_sheet = sh.worksheet(input_member)
-                    formatted_date = input_date.strftime("%Y/%m/%d")
-                    total_amount = input_shares * input_price
-                    
-                    row_data = [
-                        formatted_date,
-                        input_type,
-                        input_name.strip(),
-                        clean_code,
-                        input_shares,
-                        input_price,
-                        total_amount
-                    ]
-                    target_sheet.append_row(row_data)
-                    st.sidebar.success(f"✅ {input_member} に {input_name} ({input_type}) を追加しました！")
-                    st.rerun()
-                except Exception as e:
-                    st.sidebar.error(f"登録エラー: {e}")
 
     # =========================================================================
     # メインタブの作成
@@ -288,7 +319,7 @@ try:
                 df_log['利益率'] = pd.to_numeric(df_log['利益率'], errors='coerce')
                 df_log = df_log.dropna(subset=['日付', 'メンバー', '総資産'])
                 
-                # --- 1. 資産推移チャート（全員のポップアップ表示対応） ---
+                # --- 1. 資産推移チャート ---
                 st.subheader("📈 全員の資産推移グラフ")
                 
                 df_log['総資産(フォーマット)'] = df_log['総資産'].apply(lambda x: f"¥{int(x):,}")
@@ -389,7 +420,16 @@ try:
     with tab_personal:
         st.header("👤 個人別ポートフォリオ詳細")
         
-        selected_member = st.radio("メンバーを選択してください", members, horizontal=True, key="personal_radio")
+        col_mem_select, col_btn_add = st.columns([4, 1])
+        
+        with col_mem_select:
+            selected_member = st.radio("メンバーを選択してください", members, horizontal=True, key="personal_radio")
+            
+        with col_btn_add:
+            st.markdown("<br>", unsafe_allow_html=True)
+            # 💡 個人別タブ内に「＋ 取引を入力する」ボタンを配置
+            if st.button("➕ 取引を入力する", type="primary"):
+                open_trade_input_dialog(sh, selected_member, members)
         
         if selected_member:
             state = calculate_member_state(sh, selected_member)
