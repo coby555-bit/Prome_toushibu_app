@@ -1,39 +1,31 @@
 import streamlit as st
-import yfinance as yf
-import pandas as pd
+import gspread
+from google.oauth2.service_account import Credentials
 
-# ページの基本設定
-st.set_page_config(page_title="投資部レース (プロトタイプ)", layout="wide")
+st.title("📊 投資部 スプレッドシート連携テスト")
 
-# タイトル
-st.title("📊 投資部 100万円投資レース (Python版)")
-
-# サイドバーで銘柄コードを入力
-st.sidebar.header("設定")
-symbol = st.sidebar.text_input("銘柄コード (例: 7203)", value="7203")
-
-# .T (東証) を自動付与
-if not symbol.endswith(".T") and symbol.isdigit():
-    ticker_symbol = f"{symbol}.T"
-else:
-    ticker_symbol = symbol
-
-st.subheader(f"📈 {ticker_symbol} の過去1ヶ月の株価推移")
-
+# Secretsから認証情報を読み込む
 try:
-    # yfinanceで株価データを取得
-    with st.spinner("株価データを取得中..."):
-        ticker_data = yf.Ticker(ticker_symbol)
-        df = ticker_data.history(period="1mo")
+    credentials = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"],
+        scopes=[
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+    )
+    # gspreadでログイン
+    gc = gspread.authorize(credentials)
     
-    if not df.empty:
-        # 終値の折れ線グラフを表示
-        st.line_chart(df["Close"])
-        
-        # データの表を表示
-        st.write("▼ 生データ")
-        st.dataframe(df[["Open", "High", "Low", "Close", "Volume"]].tail())
-    else:
-        st.warning("データが見つかりませんでした。銘柄コードを確認してください。")
+    # スプレッドシートを開く（IDを指定）
+    SPREADSHEET_ID = '1cDErL19Flvjk1EuES0RggRbzI5_wHK2VGhp7A-FQMtA'
+    sh = gc.open_by_key(SPREADSHEET_ID)
+    
+    # ワークシート一覧を取得して表示
+    worksheets = [ws.title for ws in sh.worksheets()]
+    st.success("✅ スプレッドシートの連携に成功しました！")
+    
+    st.write("▼ シート一覧")
+    st.write(worksheets)
+
 except Exception as e:
-    st.error(f"エラーが発生しました: {e}")
+    st.error(f"連携エラーが発生しました: {e}")
