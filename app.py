@@ -56,7 +56,21 @@ def clean_number(val):
     except ValueError:
         return 0.0
 
-# 💡 システム用シート一覧（PredictionHistoryもここに追加して除外）
+# 💡 安全な金額文字列フォーマット関数（＋/－付き）
+def fmt_currency_sign(val):
+    try:
+        return "¥" + "{:+,.0f}".format(float(val))
+    except (ValueError, TypeError):
+        return "¥0"
+
+# 💡 安全な金額文字列フォーマット関数（符号なし）
+def fmt_currency(val):
+    try:
+        return "¥" + "{:,.0f}".format(float(val))
+    except (ValueError, TypeError):
+        return "¥0"
+
+# 💡 システム用シート一覧（PredictionHistory等を除外）
 SYSTEM_SHEETS = ['ダッシュボード', 'DailyLog', 'Temp', 'AppCache', 'PredictionCache', 'RuleData', 'PredictionHistory', 'ログ', '設定']
 
 try:
@@ -79,7 +93,6 @@ try:
             
             if len(log_values) > 1:
                 df_log = pd.DataFrame(log_values[1:], columns=log_values[0])
-                # PredictionHistoryなどが混ざっている場合はフィルタリング
                 df_log = df_log[~df_log['メンバー'].isin(SYSTEM_SHEETS)]
                 df_log['総資産'] = pd.to_numeric(df_log['総資産'], errors='coerce')
                 df_log['利益率'] = pd.to_numeric(df_log['利益率'], errors='coerce')
@@ -121,10 +134,10 @@ try:
                         ranking_display.append({
                             "順位": f"{int(row['順位'])}位",
                             "メンバー": row['メンバー'],
-                            "総資産": f"¥{int(row['総資産']):,}",
-                            "総損益": f"¥{pnl:+,.0f}",
-                            "利益率": f"{row['利益率']:+.2f}%",
-                            "前日比": f"¥{diff:+,.0f} ({diff_rate:+.2f}%)"
+                            "総資産": fmt_currency(row['総資産']),
+                            "総損益": fmt_currency_sign(pnl),
+                            "利益率": "{:+.2f}%".format(row['利益率']),
+                            "前日比": f"{fmt_currency_sign(diff)} ({diff_rate:+.2f}%)"
                         })
                     
                     st.dataframe(pd.DataFrame(ranking_display), use_container_width=True)
@@ -134,7 +147,7 @@ try:
             st.error(f"DailyLogの読み込みエラー: {e}")
 
     # =========================================================================
-    # TAB 2: 個人別詳細（買付余力・税引後実現損益・合計総資産 対応版）
+    # TAB 2: 個人別詳細
     # =========================================================================
     with tab_personal:
         st.header("👤 個人別ポートフォリオ詳細")
@@ -185,7 +198,6 @@ try:
                         elif trade_type == "売り":
                             if holdings[code]["shares"] > 0:
                                 avg_cost = holdings[code]["total_cost"] / holdings[code]["shares"]
-                                # 売り決済による利益（損失）の加算
                                 trade_profit = (price - avg_cost) * shares
                                 realized_pnl_pre_tax += trade_profit
                                 
@@ -199,7 +211,7 @@ try:
                     # 現在保有中のポジションの取得総額
                     current_stock_cost = sum([data["total_cost"] for data in holdings.values() if data["shares"] > 0])
                     
-                    # 💡 買付余力（現金残高）の計算: 元本 + 税引後実現損益 - 現状の株買い付けコスト
+                    # 💡 買付余力（現金残高）: 元本 + 税引後実現損益 - 現状の株買い付けコスト
                     cash_balance = INITIAL_CAPITAL + realized_pnl_post_tax - current_stock_cost
                     
                     # 現在保有中の銘柄コード
@@ -229,12 +241,12 @@ try:
                         portfolio_data.append({
                             "コード": code,
                             "銘柄名": h["name"],
-                            "保有株数": f"{shares:,} 株",
-                            "取得単価": f"¥{int(avg_price):,}",
-                            "現在株価": f"¥{int(current_price):,}",
-                            "評価額": f"¥{int(eval_val):,}",
-                            "含み損益": f"¥{pnl_val:+,.0f}",
-                            "損益率": f"{pnl_rate:+.2f}%"
+                            "保有株数": "{:,} 株".format(shares),
+                            "取得単価": fmt_currency(avg_price),
+                            "現在株価": fmt_currency(current_price),
+                            "評価額": fmt_currency(eval_val),
+                            "含み損益": fmt_currency_sign(pnl_val),
+                            "損益率": "{:+.2f}%".format(pnl_rate)
                         })
                     
                     # 💡 合計総資産 (買付余力 + 株式評価額)
@@ -247,13 +259,13 @@ try:
                     # ----------------------------------------------------
                     st.subheader(f"📊 {selected_member} の資産状況サマリー")
                     col1, col2, col3, col4 = st.columns(4)
-                    col1.metric("合計総資産", f"¥{int(total_assets):,}", delta=f"{total_profit:+,.0f}円 ({total_profit_rate:+.2f}%)")
-                    col2.metric("買付余力 (現金)", f"¥{int(cash_balance):,}")
-                    col3.metric("実現損益 (税引後)", f"¥{int(realized_pnl_post_tax):,+}")
-                    col4.metric("含み損益 (評価益)", f"¥{int(total_unrealized_pnl):,+}")
+                    col1.metric("合計総資産", fmt_currency(total_assets), delta=f"{fmt_currency_sign(total_profit)} ({total_profit_rate:+.2f}%)")
+                    col2.metric("買付余力 (現金)", fmt_currency(cash_balance))
+                    col3.metric("実現損益 (税引後)", fmt_currency_sign(realized_pnl_post_tax))
+                    col4.metric("含み損益 (評価益)", fmt_currency_sign(total_unrealized_pnl))
                     
                     st.markdown("---")
-                    st.subheader(f"📈 現在保有銘柄 一覧")
+                    st.subheader("📈 現在保有銘柄 一覧")
                     
                     if portfolio_data:
                         st.dataframe(pd.DataFrame(portfolio_data), use_container_width=True)
