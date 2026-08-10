@@ -5,6 +5,7 @@ import yfinance as yf
 import altair as alt
 import re
 import urllib.request
+import json
 from datetime import datetime
 from google.oauth2.service_account import Credentials
 
@@ -14,12 +15,12 @@ st.title("📊 投資部 100万円投資レース")
 
 # 💡 メンバーカラーのパレット定義
 MEMBER_COLORS = [
-    {"main": "#0d6efd", "bg_rgba": "rgba(13, 110, 253, 0.12)", "border": "#0d6efd"},  # メンバー1: ブルー
-    {"main": "#dc3545", "bg_rgba": "rgba(220, 53, 69, 0.12)", "border": "#dc3545"},  # メンバー2: レッド
-    {"main": "#198754", "bg_rgba": "rgba(25, 135, 84, 0.12)", "border": "#198754"},   # メンバー3: グリーン
-    {"main": "#ffc107", "bg_rgba": "rgba(255, 193, 7, 0.15)", "border": "#ffc107"},  # メンバー4: イエロー
-    {"main": "#0dcaf0", "bg_rgba": "rgba(13, 202, 240, 0.12)", "border": "#0dcaf0"}, # メンバー5: シアン
-    {"main": "#6f42c1", "bg_rgba": "rgba(111, 66, 193, 0.12)", "border": "#6f42c1"}  # メンバー6: パープル
+    {"main": "#0d6efd", "bg_rgba": "rgba(13, 110, 253, 0.12)", "border": "#0d6efd"},  # ブルー
+    {"main": "#dc3545", "bg_rgba": "rgba(220, 53, 69, 0.12)", "border": "#dc3545"},  # レッド
+    {"main": "#198754", "bg_rgba": "rgba(25, 135, 84, 0.12)", "border": "#198754"},   # グリーン
+    {"main": "#ffc107", "bg_rgba": "rgba(255, 193, 7, 0.15)", "border": "#ffc107"},  # イエロー
+    {"main": "#0dcaf0", "bg_rgba": "rgba(13, 202, 240, 0.12)", "border": "#0dcaf0"}, # シアン
+    {"main": "#6f42c1", "bg_rgba": "rgba(111, 66, 193, 0.12)", "border": "#6f42c1"}  # パープル
 ]
 
 SPREADSHEET_ID = '1cDErL19Flvjk1EuES0RggRbzI5_wHK2VGhp7A-FQMtA'
@@ -298,8 +299,8 @@ try:
         except Exception as e:
             st.error(f"ルールデータ読み込みエラー: {e}")
 
-    # メインタブの作成
-    tab_race, tab_personal = st.tabs(["🏆 実績 ＆ 全体ランキング", "👤 個人別詳細"])
+    # 💡 3つのタブに変更
+    tab_race, tab_personal, tab_ai = st.tabs(["🏆 実績 ＆ 全体ランキング", "👤 個人別詳細", "🤖 AI診断"])
 
     # =========================================================================
     # TAB 1: 実績 ＆ 全体ランキング
@@ -317,37 +318,19 @@ try:
                 df_log['利益率'] = pd.to_numeric(df_log['利益率'], errors='coerce')
                 df_log = df_log.dropna(subset=['日付', 'メンバー', '総資産'])
                 
-                # --- 1. 資産推移チャート設定 ---
                 st.subheader("📈 全員の資産推移グラフ")
                 
-                # 💡 操作UI: 期間ラジオボタン ＆ リセット ＆ メンバー線ON/OFF選択
                 col_chart_ctrl1, col_chart_ctrl2, col_chart_ctrl3 = st.columns([2, 1.5, 3])
                 
                 with col_chart_ctrl1:
-                    # 💡 表示期間切り替え（key設定によりSessionStateで選択を保持）
-                    period_range = st.radio(
-                        "表示期間",
-                        ["全期間", "1ヶ月", "1週間"],
-                        horizontal=True,
-                        key="chart_period_range_select"
-                    )
-                    
+                    period_range = st.radio("表示期間", ["全期間", "1ヶ月", "1週間"], horizontal=True, key="chart_period_range_select")
                 with col_chart_ctrl2:
                     st.markdown("<br>", unsafe_allow_html=True)
-                    # 💡 拡大縮小リセットボタン
                     if st.button("🔄 拡大・縮小をリセット"):
                         st.rerun()
-                        
                 with col_chart_ctrl3:
-                    # 💡 線のON/OFF用マルチセレクト
-                    selected_chart_members = st.multiselect(
-                        "表示するメンバーの選択 (線のON/OFF)",
-                        options=members,
-                        default=members,
-                        key="chart_members_multiselect"
-                    )
+                    selected_chart_members = st.multiselect("表示するメンバーの選択 (線のON/OFF)", options=members, default=members, key="chart_members_multiselect")
 
-                # 日付クレンジング＆期間フィルタリング
                 df_log['日付_dt'] = pd.to_datetime(df_log['日付'], errors='coerce')
                 df_chart_src = df_log.dropna(subset=['日付_dt']).sort_values('日付_dt').copy()
                 
@@ -358,22 +341,16 @@ try:
                     max_d = df_chart_src['日付_dt'].max()
                     df_chart_src = df_chart_src[df_chart_src['日付_dt'] >= max_d - pd.Timedelta(days=30)]
 
-                # メンバーのON/OFFフィルター適用
                 if selected_chart_members:
                     df_chart_src = df_chart_src[df_chart_src['メンバー'].isin(selected_chart_members)]
 
                 if not df_chart_src.empty:
-                    # 💡 月ごとの縞模様背景用データの算出
                     unique_dates = df_chart_src[['日付', '日付_dt']].drop_duplicates().sort_values('日付_dt')
                     unique_dates['年月'] = unique_dates['日付_dt'].dt.to_period('M')
-                    month_groups = unique_dates.groupby('年月').agg(
-                        start_date=('日付', 'first'),
-                        end_date=('日付', 'last')
-                    ).reset_index()
+                    month_groups = unique_dates.groupby('年月').agg(start_date=('日付', 'first'), end_date=('日付', 'last')).reset_index()
                     month_groups['stripe'] = month_groups.index % 2 == 1
                     stripes_df = month_groups[month_groups['stripe']].copy()
 
-                    # 💡 週の区切り（縦破線）用データの算出
                     unique_dates['週番号'] = unique_dates['日付_dt'].dt.isocalendar().week
                     unique_dates['前週番号'] = unique_dates['週番号'].shift(1)
                     week_starts = unique_dates[unique_dates['週番号'] != unique_dates['前週番号']]['日付'].tolist()
@@ -381,33 +358,14 @@ try:
                         week_starts = week_starts[1:]
                     df_week_rules = pd.DataFrame({'日付': week_starts})
 
-                    # チャートのベース構築
                     df_chart_src['総資産(フォーマット)'] = df_chart_src['総資産'].apply(lambda x: f"¥{int(x):,}")
                     df_pivot_log = df_chart_src.pivot(index='日付', columns='メンバー', values='総資産(フォーマット)').reset_index()
 
-                    # インタラクティブ凡例選択（線のON/OFF強調）
                     legend_selection = alt.selection_point(fields=['メンバー'], bind='legend')
 
-                    # 1. 月ごとの縞模様（背景レイヤー）
-                    stripe_bg = alt.Chart(stripes_df).mark_rect(
-                        opacity=0.12,
-                        color='gray'
-                    ).encode(
-                        x='start_date:N',
-                        x2='end_date:N'
-                    )
+                    stripe_bg = alt.Chart(stripes_df).mark_rect(opacity=0.12, color='gray').encode(x='start_date:N', x2='end_date:N')
+                    week_rules = alt.Chart(df_week_rules).mark_rule(strokeDash=[4, 4], color='#888888', opacity=0.6, strokeWidth=1.2).encode(x='日付:N')
 
-                    # 2. 週の区切り破線（垂直線レイヤー）
-                    week_rules = alt.Chart(df_week_rules).mark_rule(
-                        strokeDash=[4, 4],
-                        color='#888888',
-                        opacity=0.6,
-                        strokeWidth=1.2
-                    ).encode(
-                        x='日付:N'
-                    )
-
-                    # 3. メインの折れ線レイヤー
                     chart_base = alt.Chart(df_chart_src).encode(
                         x=alt.X('日付:N', title='日付'),
                         y=alt.Y('総資産:Q', title='総資産 (円)', scale=alt.Scale(zero=False)),
@@ -416,32 +374,18 @@ try:
                     ).add_params(legend_selection)
 
                     lines = chart_base.mark_line(strokeWidth=3)
-
-                    # 4. マウスホバーポップアップ（ツールチップ）
                     nearest = alt.selection_point(nearest=True, on='pointerover', fields=['日付'], empty=False)
                     tooltip_cols = [alt.Tooltip('日付:N')] + [alt.Tooltip(f'{m}:N', title=m) for m in members if m in df_pivot_log.columns]
 
-                    selectors = alt.Chart(df_pivot_log).mark_rect().encode(
-                        x='日付:N',
-                        opacity=alt.value(0),
-                        tooltip=tooltip_cols
-                    ).add_params(nearest)
+                    selectors = alt.Chart(df_pivot_log).mark_rect().encode(x='日付:N', opacity=alt.value(0), tooltip=tooltip_cols).add_params(nearest)
+                    points = chart_base.mark_point(size=50).encode(opacity=alt.condition(nearest, alt.value(1), alt.value(0)))
+                    hover_rules = alt.Chart(df_pivot_log).mark_rule(color='gray', strokeDash=[2, 2]).encode(x='日付:N').transform_filter(nearest)
 
-                    points = chart_base.mark_point(size=50).encode(
-                        opacity=alt.condition(nearest, alt.value(1), alt.value(0))
-                    )
-
-                    hover_rules = alt.Chart(df_pivot_log).mark_rule(color='gray', strokeDash=[2, 2]).encode(
-                        x='日付:N'
-                    ).transform_filter(nearest)
-
-                    # 全レイヤーの重ね合わせ描画
                     final_chart = alt.layer(stripe_bg, week_rules, lines, selectors, points, hover_rules).properties(height=420).interactive()
                     st.altair_chart(final_chart, use_container_width=True)
                 else:
                     st.info("選択された条件に該当するデータがありません。")
 
-                # --- 2. 最新資産ランキング ---
                 st.subheader("🏆 最新資産ランキング")
                 
                 all_member_states = {}
@@ -688,6 +632,112 @@ try:
                             st.error(f"保存エラー: {ex}")
             else:
                 st.info("取引データが見つからないか、形式が正しくありません。")
+
+    # =========================================================================
+    # TAB 3: AIポートフォリオ診断 (新規追加！)
+    # =========================================================================
+    with tab_ai:
+        st.header("🤖 AI ポートフォリオ診断 ＆ 相場アドバイス")
+        st.markdown("最新のAIモデルがあなたのポートフォリオを分析し、バランス評価や今後の戦略をアドバイスします！")
+        
+        # 💡 APIキーの入力欄（無料で簡単に取得できる Groq を推奨）
+        st.info("💡 超高速の **Groq API** を使用します。[Groq Console](https://console.groq.com/keys) から無料のAPIキーを取得して入力してください。")
+        api_key = st.text_input("🔑 Groq API キー", type="password", placeholder="gsk_...")
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        ai_member = st.radio("診断するメンバーを選択してください", members, horizontal=True, key="ai_radio")
+        
+        if ai_member:
+            m_vals = all_sheets_data.get(ai_member, [])
+            state = calculate_member_state(m_vals)
+            
+            if state:
+                holdings = state["holdings"]
+                active_codes = state["active_codes"]
+                cash_balance = state["cash_balance"]
+                
+                detail_map = fetch_stock_details(active_codes) if active_codes else {}
+                
+                total_stock_eval = 0.0
+                portfolio_text = ""
+                
+                # 💡 ポートフォリオの中身をAIが理解できるテキストに変換
+                for code in active_codes:
+                    h = holdings[code]
+                    shares = h["shares"]
+                    avg_price = h["total_cost"] / shares if shares > 0 else 0.0
+                    current_price = detail_map.get(str(code), {}).get("current", avg_price)
+                    
+                    eval_val = current_price * shares
+                    pnl_val = eval_val - h["total_cost"]
+                    pnl_rate = (pnl_val / h["total_cost"] * 100) if h["total_cost"] > 0 else 0.0
+                    
+                    total_stock_eval += eval_val
+                    portfolio_text += f"- 【{code}】{h['name']}: {shares}株 (取得単価: {avg_price:.0f}円 -> 現在: {current_price:.0f}円) 評価額: {eval_val:.0f}円, 含み損益: {pnl_val:+.0f}円 ({pnl_rate:+.2f}%)\n"
+                
+                total_assets = cash_balance + total_stock_eval
+                total_profit = total_assets - 1000000
+                total_profit_rate = (total_profit / 1000000) * 100
+                
+                if not portfolio_text:
+                    portfolio_text = "現在保有している銘柄はありません。（現金100%）\n"
+                    
+                # 💡 AIへ渡すプロンプト（指示文）の作成
+                prompt_text = f"""
+以下の投資部メンバー（{ai_member}）の現在のポートフォリオを診断し、プロの投資アドバイザーとして的確でユーモアのあるアドバイスを日本語で提供してください。
+
+■ 資産状況
+- 合計総資産: {total_assets:.0f}円 (損益: {total_profit:+.0f}円 / {total_profit_rate:+.2f}%)
+- 買付余力 (現金): {cash_balance:.0f}円
+- 株式評価額: {total_stock_eval:.0f}円
+
+■ 現在の保有銘柄
+{portfolio_text}
+
+■ お願いしたいこと
+1. 現在のポートフォリオのバランス評価（現金比率、銘柄の偏り、損益状況など）
+2. 良い点と改善点の指摘
+3. 次に来そうなセクターや今後の戦略に関する励ましのアドバイス
+"""
+                
+                with st.expander("🔍 AIに送信される生データ（プロンプト）を見る", expanded=False):
+                    st.text(prompt_text)
+                    
+                st.markdown("<br>", unsafe_allow_html=True)
+                
+                # 💡 AIに通信するボタン
+                if st.button(f"✨ {ai_member} のポートフォリオをAIに診断してもらう", type="primary"):
+                    if not api_key:
+                        st.warning("⚠️ 診断を開始するには、上部に Groq API キーを入力してください。")
+                    else:
+                        with st.spinner("AIが全力で分析中...🧠💭"):
+                            try:
+                                url = "https://api.groq.com/openai/v1/chat/completions"
+                                headers = {
+                                    "Authorization": f"Bearer {api_key}",
+                                    "Content-Type": "application/json"
+                                }
+                                data = {
+                                    "model": "llama-3.1-70b-versatile", # Llama3の賢いモデルを指定
+                                    "messages": [
+                                        {"role": "system", "content": "あなたはプロの投資アドバイザーであり、投資部の顧問です。ユーモアを交えつつ、的確で優しいアドバイスを提供してください。"},
+                                        {"role": "user", "content": prompt_text}
+                                    ],
+                                    "temperature": 0.7
+                                }
+                                req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers=headers, method="POST")
+                                with urllib.request.urlopen(req) as res:
+                                    res_body = res.read().decode("utf-8")
+                                    res_json = json.loads(res_body)
+                                    ai_response = res_json["choices"][0]["message"]["content"]
+                                    
+                                st.success("診断が完了しました！")
+                                st.markdown(f"### 🤖 顧問AIからのメッセージ ({ai_member} 宛)")
+                                st.info(ai_response)
+                                
+                            except Exception as ex:
+                                st.error(f"APIリクエストに失敗しました: {ex}")
+                                st.caption("APIキーが間違っていないか確認してください。")
 
 except Exception as e:
     st.error(f"エラーが発生しました: {e}")
