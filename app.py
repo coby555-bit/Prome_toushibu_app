@@ -23,7 +23,7 @@ MEMBER_COLORS = [
     {"main": "#6f42c1", "bg_rgba": "rgba(111, 66, 193, 0.12)", "border": "#6f42c1"}  # パープル
 ]
 
-SPREADSHEET_ID = '1cDErL19Flvjk1EuES0RggRbzI5_wHK2VGhp7A-FQMtA'
+SPREADSHEET_ID = st.secrets.get("SPREADSHEET_ID", '1cDErL19Flvjk1EuES0RggRbzI5_wHK2VGhp7A-FQMtA')
 SYSTEM_SHEETS = ['ダッシュボード', 'DailyLog', 'Temp', 'AppCache', 'PredictionCache', 'RuleData', 'PredictionHistory', 'ログ', '設定']
 
 # 💡 Google Sheets API制限回避用キャッシュ関数 (60秒保持)
