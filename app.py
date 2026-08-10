@@ -140,6 +140,7 @@ try:
                         total_eval_val += eval_val
                         total_pnl_val += pnl_val
                         
+                        # 💡 エラー修正箇所: + を前に、, を後に記述 (例: f"{pnl_val:+,.0f}")
                         portfolio_data.append({
                             "コード": code,
                             "銘柄名": h["name"],
@@ -147,7 +148,7 @@ try:
                             "取得単価": f"¥{int(avg_price):,}",
                             "現在株価": f"¥{int(current_price):,}",
                             "評価額": f"¥{int(eval_val):,}",
-                            "含み損益": f"¥{int(pnl_val):,+}",
+                            "含み損益": f"¥{pnl_val:+,.0f}",
                             "損益率": f"{pnl_rate:+.2f}%"
                         })
                     
