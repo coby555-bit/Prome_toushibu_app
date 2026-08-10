@@ -299,7 +299,7 @@ try:
         except Exception as e:
             st.error(f"ルールデータ読み込みエラー: {e}")
 
-    # 💡 3つのタブに変更
+    # メインタブの作成
     tab_race, tab_personal, tab_ai = st.tabs(["🏆 実績 ＆ 全体ランキング", "👤 個人別詳細", "🤖 AI診断"])
 
     # =========================================================================
@@ -634,13 +634,12 @@ try:
                 st.info("取引データが見つからないか、形式が正しくありません。")
 
     # =========================================================================
-    # TAB 3: AIポートフォリオ診断 (新規追加！)
+    # TAB 3: AIポートフォリオ診断
     # =========================================================================
     with tab_ai:
         st.header("🤖 AI ポートフォリオ診断 ＆ 相場アドバイス")
         st.markdown("最新のAIモデルがあなたのポートフォリオを分析し、バランス評価や今後の戦略をアドバイスします！")
         
-        # 💡 APIキーの入力欄（無料で簡単に取得できる Groq を推奨）
         st.info("💡 超高速の **Groq API** を使用します。[Groq Console](https://console.groq.com/keys) から無料のAPIキーを取得して入力してください。")
         api_key = st.text_input("🔑 Groq API キー", type="password", placeholder="gsk_...")
         
@@ -661,7 +660,6 @@ try:
                 total_stock_eval = 0.0
                 portfolio_text = ""
                 
-                # 💡 ポートフォリオの中身をAIが理解できるテキストに変換
                 for code in active_codes:
                     h = holdings[code]
                     shares = h["shares"]
@@ -682,7 +680,6 @@ try:
                 if not portfolio_text:
                     portfolio_text = "現在保有している銘柄はありません。（現金100%）\n"
                     
-                # 💡 AIへ渡すプロンプト（指示文）の作成
                 prompt_text = f"""
 以下の投資部メンバー（{ai_member}）の現在のポートフォリオを診断し、プロの投資アドバイザーとして的確でユーモアのあるアドバイスを日本語で提供してください。
 
@@ -705,7 +702,6 @@ try:
                     
                 st.markdown("<br>", unsafe_allow_html=True)
                 
-                # 💡 AIに通信するボタン
                 if st.button(f"✨ {ai_member} のポートフォリオをAIに診断してもらう", type="primary"):
                     if not api_key:
                         st.warning("⚠️ 診断を開始するには、上部に Groq API キーを入力してください。")
@@ -713,12 +709,16 @@ try:
                         with st.spinner("AIが全力で分析中...🧠💭"):
                             try:
                                 url = "https://api.groq.com/openai/v1/chat/completions"
+                                
+                                # 💡 修正ポイント: 403 Forbidden回避のためのUser-Agent偽装 ＆ APIキーの空白除去
                                 headers = {
-                                    "Authorization": f"Bearer {api_key}",
-                                    "Content-Type": "application/json"
+                                    "Authorization": f"Bearer {api_key.strip()}",
+                                    "Content-Type": "application/json",
+                                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                                 }
+                                
                                 data = {
-                                    "model": "llama-3.1-70b-versatile", # Llama3の賢いモデルを指定
+                                    "model": "llama-3.1-70b-versatile",
                                     "messages": [
                                         {"role": "system", "content": "あなたはプロの投資アドバイザーであり、投資部の顧問です。ユーモアを交えつつ、的確で優しいアドバイスを提供してください。"},
                                         {"role": "user", "content": prompt_text}
@@ -737,7 +737,7 @@ try:
                                 
                             except Exception as ex:
                                 st.error(f"APIリクエストに失敗しました: {ex}")
-                                st.caption("APIキーが間違っていないか確認してください。")
+                                st.caption("APIキーに誤りがないか再度確認してください。")
 
 except Exception as e:
     st.error(f"エラーが発生しました: {e}")
