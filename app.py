@@ -50,15 +50,14 @@ def fetch_latest_prices(symbols):
 def clean_number(val):
     if val is None:
         return 0.0
-    # カンマや全角、円マーク等を除去して数値化
     s = re.sub(r'[^\d.-]', '', str(val))
     try:
         return float(s) if s else 0.0
     except ValueError:
         return 0.0
 
-# システム用シート一覧
-SYSTEM_SHEETS = ['ダッシュボード', 'DailyLog', 'Temp', 'AppCache', 'PredictionCache', 'RuleData']
+# 💡 システム用シート一覧（PredictionHistoryもここに追加して除外）
+SYSTEM_SHEETS = ['ダッシュボード', 'DailyLog', 'Temp', 'AppCache', 'PredictionCache', 'RuleData', 'PredictionHistory', 'ログ', '設定']
 
 try:
     sh = get_spreadsheet()
@@ -80,6 +79,8 @@ try:
             
             if len(log_values) > 1:
                 df_log = pd.DataFrame(log_values[1:], columns=log_values[0])
+                # PredictionHistoryなどが混ざっている場合はフィルタリング
+                df_log = df_log[~df_log['メンバー'].isin(SYSTEM_SHEETS)]
                 df_log['総資産'] = pd.to_numeric(df_log['総資産'], errors='coerce')
                 df_log['利益率'] = pd.to_numeric(df_log['利益率'], errors='coerce')
                 df_log = df_log.dropna(subset=['日付', 'メンバー', '総資産'])
@@ -133,7 +134,7 @@ try:
             st.error(f"DailyLogの読み込みエラー: {e}")
 
     # =========================================================================
-    # TAB 2: 個人別詳細（強化版保有ロジック）
+    # TAB 2: 個人別詳細（買付余力・税引後実現損益・合計総資産 対応版）
     # =========================================================================
     with tab_personal:
         st.header("👤 個人別ポートフォリオ詳細")
@@ -152,19 +153,19 @@ try:
                 columns = [h if h.strip() != "" else f"列_{i+1}" for i, h in enumerate(header)]
                 df.columns = columns
                 
-                # 1列目（日付）が空でない行のみ抽出
                 df_trade = df[df.iloc[:, 0] != ""].copy()
                 
                 if not df_trade.empty:
                     # ----------------------------------------------------
-                    # 🔄 強化版：保有状況の計算ロジック
+                    # 🔄 買付余力 ＆ 税引後実現損益 ＆ 保有計算ロジック
                     # ----------------------------------------------------
+                    INITIAL_CAPITAL = 1000000 # 初期元本 100万円
+                    realized_pnl_pre_tax = 0.0 # 税引前実現損益
                     holdings = {}
                     
                     for _, row in df_trade.iterrows():
-                        trade_type = str(row.iloc[1]).strip() # '買い' or '売り'
+                        trade_type = str(row.iloc[1]).strip()
                         name = str(row.iloc[2]).strip()
-                        # 銘柄コードを厳格に文字列化＆4桁に整頓
                         raw_code = str(row.iloc[3]).strip().replace('.0', '')
                         code = re.sub(r'^\d{4}$', lambda m: m.group(0), raw_code)
                         
@@ -184,51 +185,77 @@ try:
                         elif trade_type == "売り":
                             if holdings[code]["shares"] > 0:
                                 avg_cost = holdings[code]["total_cost"] / holdings[code]["shares"]
+                                # 売り決済による利益（損失）の加算
+                                trade_profit = (price - avg_cost) * shares
+                                realized_pnl_pre_tax += trade_profit
+                                
                                 holdings[code]["shares"] = max(0, holdings[code]["shares"] - shares)
                                 holdings[code]["total_cost"] = max(0.0, holdings[code]["total_cost"] - (avg_cost * shares))
 
-                    # 1株以上保有している銘柄に絞り込み
+                    # 💡 税金の計算 (利益が出ている場合のみ 20.315% を引く)
+                    tax = int(realized_pnl_pre_tax * 0.20315) if realized_pnl_pre_tax > 0 else 0
+                    realized_pnl_post_tax = realized_pnl_pre_tax - tax
+                    
+                    # 現在保有中のポジションの取得総額
+                    current_stock_cost = sum([data["total_cost"] for data in holdings.values() if data["shares"] > 0])
+                    
+                    # 💡 買付余力（現金残高）の計算: 元本 + 税引後実現損益 - 現状の株買い付けコスト
+                    cash_balance = INITIAL_CAPITAL + realized_pnl_post_tax - current_stock_cost
+                    
+                    # 現在保有中の銘柄コード
                     active_codes = [code for code, data in holdings.items() if data["shares"] > 0]
                     
-                    st.subheader(f"📈 {selected_member} の現在保有銘柄")
+                    # 株価の取得と評価額計算
+                    price_map = fetch_latest_prices(active_codes) if active_codes else {}
                     
-                    if active_codes:
-                        with st.spinner("最新株価を取得中..."):
-                            price_map = fetch_latest_prices(active_codes)
+                    total_stock_eval = 0.0
+                    total_unrealized_pnl = 0.0
+                    portfolio_data = []
+                    
+                    for code in active_codes:
+                        h = holdings[code]
+                        shares = h["shares"]
+                        avg_price = h["total_cost"] / shares if shares > 0 else 0.0
+                        current_price = price_map.get(str(code), avg_price)
                         
-                        portfolio_data = []
-                        total_eval_val = 0.0
-                        total_pnl_val = 0.0
+                        eval_val = current_price * shares
+                        cost_val = h["total_cost"]
+                        pnl_val = eval_val - cost_val
+                        pnl_rate = (pnl_val / cost_val * 100) if cost_val > 0 else 0.0
                         
-                        for code in active_codes:
-                            h = holdings[code]
-                            shares = h["shares"]
-                            avg_price = h["total_cost"] / shares if shares > 0 else 0.0
-                            current_price = price_map.get(str(code), avg_price)
-                            
-                            eval_val = current_price * shares
-                            cost_val = h["total_cost"]
-                            pnl_val = eval_val - cost_val
-                            pnl_rate = (pnl_val / cost_val * 100) if cost_val > 0 else 0.0
-                            
-                            total_eval_val += eval_val
-                            total_pnl_val += pnl_val
-                            
-                            portfolio_data.append({
-                                "コード": code,
-                                "銘柄名": h["name"],
-                                "保有株数": f"{shares:,} 株",
-                                "取得単価": f"¥{int(avg_price):,}",
-                                "現在株価": f"¥{int(current_price):,}",
-                                "評価額": f"¥{int(eval_val):,}",
-                                "含み損益": f"¥{pnl_val:+,.0f}",
-                                "損益率": f"{pnl_rate:+.2f}%"
-                            })
+                        total_stock_eval += eval_val
+                        total_unrealized_pnl += pnl_val
                         
-                        col1, col2 = st.columns(2)
-                        col1.metric("株式評価額 合計", f"¥{int(total_eval_val):,}")
-                        col2.metric("含み損益 合計", f"¥{int(total_pnl_val):,}", delta=f"{total_pnl_val:+,.0f}円")
-                        
+                        portfolio_data.append({
+                            "コード": code,
+                            "銘柄名": h["name"],
+                            "保有株数": f"{shares:,} 株",
+                            "取得単価": f"¥{int(avg_price):,}",
+                            "現在株価": f"¥{int(current_price):,}",
+                            "評価額": f"¥{int(eval_val):,}",
+                            "含み損益": f"¥{pnl_val:+,.0f}",
+                            "損益率": f"{pnl_rate:+.2f}%"
+                        })
+                    
+                    # 💡 合計総資産 (買付余力 + 株式評価額)
+                    total_assets = cash_balance + total_stock_eval
+                    total_profit = total_assets - INITIAL_CAPITAL
+                    total_profit_rate = (total_profit / INITIAL_CAPITAL) * 100
+                    
+                    # ----------------------------------------------------
+                    # 📊 資産状況サマリー（4列カード表示）
+                    # ----------------------------------------------------
+                    st.subheader(f"📊 {selected_member} の資産状況サマリー")
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("合計総資産", f"¥{int(total_assets):,}", delta=f"{total_profit:+,.0f}円 ({total_profit_rate:+.2f}%)")
+                    col2.metric("買付余力 (現金)", f"¥{int(cash_balance):,}")
+                    col3.metric("実現損益 (税引後)", f"¥{int(realized_pnl_post_tax):,+}")
+                    col4.metric("含み損益 (評価益)", f"¥{int(total_unrealized_pnl):,+}")
+                    
+                    st.markdown("---")
+                    st.subheader(f"📈 現在保有銘柄 一覧")
+                    
+                    if portfolio_data:
                         st.dataframe(pd.DataFrame(portfolio_data), use_container_width=True)
                     else:
                         st.info("現在保有中の銘柄はありません。")
