@@ -12,14 +12,14 @@ from google.oauth2.service_account import Credentials
 st.set_page_config(page_title="投資部 100万円投資レース", layout="wide")
 st.title("📊 投資部 100万円投資レース")
 
-# 💡 メンバーカラーのパレット定義 (メイン色 / 淡い背景色)
+# 💡 メンバーカラーのパレット定義 (メイン色 / 透過背景色 / ボーダー色)
 MEMBER_COLORS = [
-    {"main": "#0d6efd", "bg_hex": "#f0f4ff", "border": "#0d6efd"}, # メンバー1: ブルー
-    {"main": "#dc3545", "bg_hex": "#fff0f2", "border": "#dc3545"}, # メンバー2: レッド
-    {"main": "#198754", "bg_hex": "#f0fff4", "border": "#198754"}, # メンバー3: グリーン
-    {"main": "#d39e00", "bg_hex": "#fffdf0", "border": "#ffc107"}, # メンバー4: イエロー
-    {"main": "#0dcaf0", "bg_hex": "#f0fcff", "border": "#0dcaf0"}, # メンバー5: シアン
-    {"main": "#6f42c1", "bg_hex": "#f8f0ff", "border": "#6f42c1"}  # メンバー6: パープル
+    {"main": "#0d6efd", "bg_rgba": "rgba(13, 110, 253, 0.12)", "border": "#0d6efd"},  # メンバー1: ブルー
+    {"main": "#dc3545", "bg_rgba": "rgba(220, 53, 69, 0.12)", "border": "#dc3545"},  # メンバー2: レッド
+    {"main": "#198754", "bg_rgba": "rgba(25, 135, 84, 0.12)", "border": "#198754"},   # メンバー3: グリーン
+    {"main": "#ffc107", "bg_rgba": "rgba(255, 193, 7, 0.15)", "border": "#ffc107"},  # メンバー4: イエロー
+    {"main": "#0dcaf0", "bg_rgba": "rgba(13, 202, 240, 0.12)", "border": "#0dcaf0"}, # メンバー5: シアン
+    {"main": "#6f42c1", "bg_rgba": "rgba(111, 66, 193, 0.12)", "border": "#6f42c1"}  # メンバー6: パープル
 ]
 
 SPREADSHEET_ID = '1cDErL19Flvjk1EuES0RggRbzI5_wHK2VGhp7A-FQMtA'
@@ -223,7 +223,7 @@ def open_rule_edit_dialog(current_text):
             else:
                 st.error("ルール本文を入力してください。")
 
-# 💡 取引入力用モーダルダイアログ (銘柄コード入力で社名自動入力)
+# 💡 取引入力用モーダルダイアログ
 @st.dialog("📝 取引の新規入力")
 def open_trade_input_dialog(default_member, members):
     input_member = st.selectbox("メンバー", members, index=members.index(default_member) if default_member in members else 0)
@@ -231,7 +231,6 @@ def open_trade_input_dialog(default_member, members):
     
     input_code = st.text_input("銘柄コード (4桁)", placeholder="例: 7203", key="dlg_code_input")
     
-    # 💡 銘柄コード変更時に即時で日本語社名をセッションステートにセット
     clean_code = re.sub(r'[^\d]', '', str(input_code))
     
     if "last_searched_code" not in st.session_state:
@@ -440,7 +439,7 @@ try:
             st.error(f"ランキング計算エラー: {e}")
 
     # =========================================================================
-    # TAB 2: 個人別詳細 (サマリー＆保有銘柄の背景色一括統一 ＆ スマホ編集対応)
+    # TAB 2: 個人別詳細 (完全背景色包み込み対応)
     # =========================================================================
     with tab_personal:
         st.header("👤 個人別ポートフォリオ詳細")
@@ -459,26 +458,21 @@ try:
             mem_idx = members.index(selected_member) if selected_member in members else 0
             color_info = MEMBER_COLORS[mem_idx % len(MEMBER_COLORS)]
             
-            # 💡 サマリー・カード・テーブルまで全て包み込む背景色CSSスタイリング
+            # 💡【重要】:has()擬似クラスを使い、内部のコンテナブロック全体を背景色で確実に包み込むCSS
             st.markdown(f"""
                 <style>
-                .member-theme-container-{mem_idx} {{
-                    background-color: {color_info['bg_hex']} !important;
-                    padding: 24px;
-                    border-radius: 16px;
-                    border-left: 8px solid {color_info['border']};
-                    margin-top: 10px;
-                    margin-bottom: 20px;
+                div[data-testid="stVerticalBlock"]:has(div.theme-marker-{mem_idx}) {{
+                    background-color: {color_info['bg_rgba']} !important;
+                    padding: 24px !important;
+                    border-radius: 16px !important;
+                    border-left: 8px solid {color_info['border']} !important;
+                    margin-top: 15px !important;
+                    margin-bottom: 25px !important;
                 }}
-                .member-theme-container-{mem_idx} [data-testid="stMetric"] {{
-                    background-color: rgba(255, 255, 255, 0.75) !important;
-                    padding: 12px;
-                    border-radius: 10px;
-                    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-                }}
-                .member-theme-container-{mem_idx} table {{
-                    background-color: rgba(255, 255, 255, 0.85) !important;
-                    border-radius: 8px;
+                div[data-testid="stVerticalBlock"]:has(div.theme-marker-{mem_idx}) [data-testid="stMetric"] {{
+                    background-color: rgba(255, 255, 255, 0.08) !important;
+                    padding: 12px !important;
+                    border-radius: 10px !important;
                 }}
                 </style>
             """, unsafe_allow_html=True)
@@ -540,31 +534,30 @@ try:
                 total_profit = total_assets - INITIAL_CAPITAL
                 total_profit_rate = (total_profit / INITIAL_CAPITAL) * 100
                 
-                # 💡 テーマ色背景コンテナ（全体を確実に包み込む）
-                st.markdown(f'<div class="member-theme-container-{mem_idx}">', unsafe_allow_html=True)
-                
-                # 📊 資産状況サマリー
-                st.subheader(f"📊 {selected_member} の資産状況サマリー")
-                col1, col2, col3, col4, col5 = st.columns(5)
-                col1.metric("合計総資産", "¥{:,.0f}".format(total_assets), delta="{:+,.0f}円 ({:+.2f}%)".format(total_profit, total_profit_rate))
-                col2.metric("買付余力 (現金)", "¥{:,.0f}".format(cash_balance))
-                col3.metric("実現損益 (税引後)", "¥{:,.0f}".format(realized_pnl_post_tax))
-                col4.metric("含み損益 (評価益)", "¥{:,.0f}".format(total_unrealized_pnl))
-                col5.metric("前日比 (合計)", "¥{:,.0f}".format(total_day_diff), delta="{:+,.0f}円".format(total_day_diff))
-                
-                st.markdown("---")
-                st.subheader("📈 現在保有銘柄 一覧")
-                
-                if portfolio_data:
-                    df_port = pd.DataFrame(portfolio_data)
-                    st.write(df_port.to_html(escape=False, index=False), unsafe_allow_html=True)
-                else:
-                    st.info("現在保有中の銘柄はありません。")
+                # 💡【重要】st.container() 内にサマリーと一覧をまとめ、マーカー用要素を配置
+                with st.container():
+                    st.markdown(f'<div class="theme-marker-{mem_idx}" style="display:none;"></div>', unsafe_allow_html=True)
                     
-                st.markdown('</div>', unsafe_allow_html=True)
+                    # 📊 資産状況サマリー
+                    st.subheader(f"📊 {selected_member} の資産状況サマリー")
+                    col1, col2, col3, col4, col5 = st.columns(5)
+                    col1.metric("合計総資産", "¥{:,.0f}".format(total_assets), delta="{:+,.0f}円 ({:+.2f}%)".format(total_profit, total_profit_rate))
+                    col2.metric("買付余力 (現金)", "¥{:,.0f}".format(cash_balance))
+                    col3.metric("実現損益 (税引後)", "¥{:,.0f}".format(realized_pnl_post_tax))
+                    col4.metric("含み損益 (評価益)", "¥{:,.0f}".format(total_unrealized_pnl))
+                    col5.metric("前日比 (合計)", "¥{:,.0f}".format(total_day_diff), delta="{:+,.0f}円".format(total_day_diff))
+                    
+                    st.markdown("---")
+                    st.subheader("📈 現在保有銘柄 一覧")
+                    
+                    if portfolio_data:
+                        df_port = pd.DataFrame(portfolio_data)
+                        st.write(df_port.to_html(escape=False, index=False), unsafe_allow_html=True)
+                    else:
+                        st.info("現在保有中の銘柄はありません。")
                 
                 # ----------------------------------------------------
-                # ✏️ 取引履歴の直接編集機能 (スマホ最適化: カレンダー・リスト選択対応)
+                # ✏️ 取引履歴の直接編集機能 (スマホ最適化)
                 # ----------------------------------------------------
                 st.markdown("<br>", unsafe_allow_html=True)
                 with st.expander("📜 全取引履歴の編集／閲覧", expanded=False):
@@ -573,13 +566,11 @@ try:
                     df_edit_src = df_trade.iloc[:, :7].copy()
                     df_edit_src.columns = ["日付", "種別", "銘柄名", "コード", "株数", "単価", "金額"]
                     
-                    # 型のクレンジング
                     df_edit_src["日付"] = pd.to_datetime(df_edit_src["日付"], errors='coerce').dt.date
                     df_edit_src["株数"] = pd.to_numeric(df_edit_src["株数"].apply(clean_number), errors='coerce').fillna(0).astype(int)
                     df_edit_src["単価"] = pd.to_numeric(df_edit_src["単価"].apply(clean_number), errors='coerce').fillna(0.0)
                     df_edit_src["金額"] = df_edit_src["株数"] * df_edit_src["単価"]
                     
-                    # 💡 スマホに最適化された column_config 設定
                     edited_df = st.data_editor(
                         df_edit_src,
                         column_config={
@@ -602,7 +593,6 @@ try:
                             target_sheet = sh.worksheet(selected_member)
                             all_vals = state["all_values"]
                             
-                            # 日付を YYYY/MM/DD フォーマットに整えて書き込み形式に変換
                             save_df = edited_df.copy()
                             save_df["日付"] = pd.to_datetime(save_df["日付"]).dt.strftime("%Y/%m/%d")
                             save_df["金額"] = save_df["株数"] * save_df["単価"]
